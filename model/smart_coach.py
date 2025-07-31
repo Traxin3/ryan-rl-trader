@@ -1,191 +1,113 @@
-import os
+import re
 import json
 import numpy as np
-from typing import Dict, List, Any, Optional
-from transformers import AutoModel, AutoTokenizer
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+from typing import Dict, List
 import torch
-import yaml
-from stable_baselines3 import PPO
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-class VectorDatabase:
-    def __init__(self):
-        self.embeddings = []
-        self.metadata = []
-        self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
-        
-    def add_entry(self, text: str, metadata: Dict[str, Any]):
-        embedding = self.encoder.encode(text)
-        self.embeddings.append(embedding)
-        self.metadata.append(metadata)
-        
-    def search(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-        query_embedding = self.encoder.encode(query)
-        similarities = cosine_similarity([query_embedding], self.embeddings)[0]
-        top_indices = np.argsort(similarities)[-top_k:][::-1]
-        return [self.metadata[i] for i in top_indices]
 
 class SmartCoach:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.vector_db = VectorDatabase()
-        self._load_knowledge_base()
-        
-        self.llm_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.tokenizer = AutoTokenizer.from_pretrained(config['coach']['llm_model'])
-        self.llm = AutoModel.from_pretrained(config['coach']['llm_model']).to(self.llm_device)
-        
-        self.performance_history = {
-            'episode_rewards': [],
-            'actions_taken': [],
-            'adjustments_made': []
+    def __init__(self, config: Dict):
+        self.config = config['coach']
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            self.config['llm_model'],
+            torch_dtype=torch.float16 if 'cuda' in self.device else torch.float32
+        ).to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config['llm_model'])
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.param_bounds = {
+            k: tuple(v) for k, v in self.config['param_bounds'].items()
         }
-    
-    def _load_knowledge_base(self):
-        """Load RAG knowledge base from files"""
-        kb_paths = [
-            "knowledge/rl_trading_kb.json",
-            os.path.join(os.path.dirname(__file__), "../knowledge/rl_trading_kb.json")
-        ]
-        
-        for path in kb_paths:
-            if os.path.exists(path):
-                with open(path) as f:
-                    kb_data = json.load(f)
-                    for item in kb_data:
-                        self.vector_db.add_entry(
-                            text=item['description'],
-                            metadata=item
-                        )
-                break
-    
-    def analyze_performance(self, episode_rewards: List[float], 
-                          current_config: Dict[str, Any], 
-                          model: PPO) -> Optional[Dict[str, Any]]:
-        """Analyze performance and suggest adjustments"""
-        self.performance_history['episode_rewards'] = episode_rewards
-        
-        recent_rewards = episode_rewards[-20:] if len(episode_rewards) > 20 else episode_rewards
-        avg_reward = np.mean(recent_rewards)
-        std_reward = np.std(recent_rewards)
-        
-       
-        query = f"""
-        RL trading agent performance:
-        - Average reward: {avg_reward:.2f}
-        - Reward std: {std_reward:.2f}
-        - Recent trend: {'increasing' if avg_reward > np.mean(episode_rewards[:-20]) else 'decreasing'}
-        """
-        
-        similar_cases = self.vector_db.search(query)
-        
-        prompt = self._build_llm_prompt(
-            performance_summary={
-                'avg_reward': avg_reward,
-                'std_reward': std_reward,
-                'recent_trend': 'increasing' if avg_reward > np.mean(episode_rewards[:-20]) else 'decreasing'
-            },
-            current_config=current_config,
-            similar_cases=similar_cases
+
+    def analyze_and_adjust(self, model, recent_rewards: List[float]) -> bool:
+        """Analyze rewards and apply safe PPO adjustments if needed."""
+        diagnosis = self._diagnose(recent_rewards)
+        recommendation = self._get_recommendation(diagnosis)
+
+        if self._validate(recommendation):
+            return self._apply(model, recommendation)
+        else:
+            print("[SmartCoach] ⚠️ LLM recommendation invalid or out of bounds. Ignored.")
+        return False
+
+
+    def _diagnose(self, rewards: List[float]) -> Dict:
+        """Simple diagnosis from rewards"""
+        return {
+            'avg': float(np.mean(rewards)),
+            'std': float(np.std(rewards)),
+            'trend': 'up' if rewards[-1] > rewards[0] else 'down'
+        }
+
+    def _get_recommendation(self, diagnosis: Dict) -> Dict:
+        """Ask the LLM for a single param adjustment in JSON"""
+        prompt = f"""Current PPO Performance:
+- Avg Reward: {diagnosis['avg']:.2f}
+- Std: {diagnosis['std']:.2f}
+- Trend: {diagnosis['trend']}
+
+Suggest ONE PPO parameter change as JSON only:
+{{
+  "parameter": "learning_rate|ent_coef|clip_range|gamma",
+  "change_pct": -10 to +10
+}}"""
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        outputs = self.llm.generate(
+            **inputs,
+            max_new_tokens=100,
+            temperature=0.3
         )
-        
-        recommendation = self._get_llm_recommendation(prompt)
-        
-        if self._validate_recommendation(recommendation):
-            self._apply_adjustments(recommendation, model, current_config)
-            self.performance_history['adjustments_made'].append(recommendation)
-            return recommendation
-        
-        return None
-    
-    def _build_llm_prompt(self, performance_summary: Dict[str, Any],
-                         current_config: Dict[str, Any],
-                         similar_cases: List[Dict[str, Any]]) -> str:
-        """Construct detailed prompt for LLM"""
-        similar_cases_str = "\n".join(
-            f"Case {i+1}:\n- Description: {case['description']}\n- Solution: {case['solution']}"
-            for i, case in enumerate(similar_cases))
-        
-        return f"""
-        You are an expert RL trading coach. Analyze the current performance and suggest parameter adjustments.
-        
-        Current Performance:
-        - Average Reward: {performance_summary['avg_reward']:.2f}
-        - Reward Std: {performance_summary['std_reward']:.2f}
-        - Recent Trend: {performance_summary['recent_trend']}
-        
-        Current Configuration:
-        {json.dumps(current_config['ppo'], indent=2)}
-        
-        Similar Historical Cases:
-        {similar_cases_str}
-        
-        Guidelines:
-        1. Only suggest small, incremental changes
-        2. Prioritize adjustments to learning rate, entropy coefficient, and clip range first
-        3. Explain your reasoning
-        4. Output in JSON format with: adjustment_type, parameter, new_value, reasoning
-        
-        Recommendation:
-        """
-    
-    def _get_llm_recommendation(self, prompt: str) -> Dict[str, Any]:
-        """Get structured recommendation from LLM"""
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.llm_device)
-        outputs = self.llm.generate(**inputs, max_new_tokens=200)
-        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
+        raw_text = self.tokenizer.decode(outputs[0])
+
+        return self._parse_output(raw_text)
+
+    def _parse_output(self, text: str) -> Dict:
+        """Try to extract JSON from LLM output robustly"""
         try:
-            json_str = response.split('{', 1)[1].rsplit('}', 1)[0]
-            json_str = '{' + json_str + '}'
-            return json.loads(json_str)
-        except:
-            print(f"Failed to parse LLM response: {response}")
-            return None
-    
-    def _validate_recommendation(self, recommendation: Dict[str, Any]) -> bool:
-        """Validate the LLM recommendation"""
-        if not recommendation:
+            return json.loads(re.search(r'\{.*\}', text).group(0))
+        except Exception:
+            return {}
+
+    def _validate(self, recommendation: Dict) -> bool:
+        """Check that LLM suggestion is safe and makes sense"""
+        required = {'parameter', 'change_pct'}
+        if not all(k in recommendation for k in required):
             return False
-            
-        valid_params = [
-            'learning_rate', 'ent_coef', 'clip_range', 
-            'gamma', 'gae_lambda', 'n_steps'
-        ]
-        
-        if recommendation.get('parameter') not in valid_params:
+
+        param = recommendation['parameter']
+        if param not in self.param_bounds:
             return False
-            
-        param = recommendation['parameter']
-        new_value = recommendation['new_value']
-        
-        ranges = {
-            'learning_rate': (1e-6, 1e-2),
-            'ent_coef': (0.0, 0.2),
-            'clip_range': (0.1, 0.3),
-            'gamma': (0.9, 0.999),
-            'gae_lambda': (0.9, 1.0),
-            'n_steps': (256, 2048)
-        }
-        
-        return ranges[param][0] <= new_value <= ranges[param][1]
-    
-    def _apply_adjustments(self, recommendation: Dict[str, Any],
-                         model: PPO, config: Dict[str, Any]):
-        """Apply the validated adjustments"""
-        param = recommendation['parameter']
-        new_value = recommendation['new_value']
-        
+
+        try:
+            change = float(recommendation['change_pct'])
+            return -10 <= change <= 10
+        except Exception:
+            return False
+
+    def _apply(self, model, adjustment: Dict) -> bool:
+        """Apply parameter change to PPO model live"""
+        param = adjustment['parameter']
+        change_pct = float(adjustment['change_pct'])
+
         if param == 'learning_rate':
-            model.learning_rate = new_value
-        elif param == 'ent_coef':
-            model.ent_coef = new_value
+            for g in model.policy.optimizer.param_groups:
+                g['lr'] *= (1 + change_pct / 100)
+            new_val = model.policy.optimizer.param_groups[0]['lr']
+
         elif param == 'clip_range':
-            model.clip_range = new_value
-        elif param == 'n_steps':
-            model.n_steps = new_value
-            
-        config['ppo'][param] = new_value
-        
-        print(f"Applied adjustment: {param} = {new_value}")
+            old_clip = model.clip_range
+            factor = (1 + change_pct / 100)
+            model.clip_range = lambda _: old_clip(1) * factor if callable(old_clip) else old_clip * factor
+            new_val = old_clip(1) * factor if callable(old_clip) else old_clip * factor
+
+        else:
+            current = getattr(model, param)
+            new_val = current * (1 + change_pct / 100)
+            setattr(model, param, new_val)
+
+        print(f"[SmartCoach] ✅ Adjusted {param}: {change_pct:+.1f}% → new value: {new_val:.6f}")
+        return True
