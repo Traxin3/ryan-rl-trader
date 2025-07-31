@@ -5,7 +5,11 @@ import calendar
 from datetime import datetime, timedelta
 
 import pandas as pd
-import MetaTrader5 as mt5
+
+import platform
+
+def is_mt5_available():
+    return platform.system() == "Windows"
 
 from . import interface as mt
 from .symbol import SymbolInfo
@@ -15,6 +19,10 @@ def retrieve_data(
         symbol: str, from_dt: datetime, to_dt: datetime, timeframe: mt.Timeframe
     ) -> Tuple[SymbolInfo, pd.DataFrame]:
 
+    if not is_mt5_available():
+        raise RuntimeError("MetaTrader5 is not available on this platform.")
+    import MetaTrader5 as mt5
+    from . import interface as mt
     if not mt.initialize():
         raise ConnectionError(f"MetaTrader cannot be initialized")
 
@@ -50,6 +58,9 @@ def retrieve_data(
 
 
 def _get_symbol_info(symbol: str) -> SymbolInfo:
+    if not is_mt5_available():
+        raise RuntimeError("MetaTrader5 is not available on this platform.")
+    import MetaTrader5 as mt5
     if not mt5.initialize():
         raise RuntimeError(f"MetaTrader5 initialize() failed: {mt5.last_error()}")
     if not mt5.symbol_select(symbol, True):
@@ -86,6 +97,9 @@ def fetch_mt5_rates(symbol: str, timeframe: int, start: datetime = None, end: da
     Fetch historical rates from MetaTrader5 for a given symbol, timeframe, and date range (tries 365, 180, 90, 30, 7, 1 days).
     Returns a pandas DataFrame indexed by datetime, or raises ValueError if no data is returned.
     """
+    if not is_mt5_available():
+        raise RuntimeError("MetaTrader5 is not available on this platform.")
+    import MetaTrader5 as mt5
     if not mt5.initialize():
         raise RuntimeError(f"MetaTrader5 initialize() failed: {mt5.last_error()}")
     if not mt5.symbol_select(symbol, True):
