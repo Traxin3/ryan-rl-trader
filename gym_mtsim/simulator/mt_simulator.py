@@ -421,7 +421,6 @@ class MtSimulator:
         self.end = end
         
         data_dir = os.path.join(os.path.dirname(__file__), '..', 'data_cache')
-        import os
         os.makedirs(data_dir, exist_ok=True)
         total_pairs = len(self.symbols) * len(self.timeframes)
         local_pairs = []
