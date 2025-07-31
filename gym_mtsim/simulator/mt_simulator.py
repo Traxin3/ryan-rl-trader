@@ -1,3 +1,4 @@
+import os
 import platform
 # Detect if MetaTrader5 is available (for Colab/cloud compatibility)
 MT5_AVAILABLE = False
@@ -17,7 +18,6 @@ else:
     def _get_symbol_info(*args, **kwargs):
         raise RuntimeError("MetaTrader5 is not available on this platform. Please use local cache.")
 from typing import List, Tuple, Dict, Any, Optional
-import os
 import pickle
 from tqdm import tqdm
 from datetime import datetime, timedelta
