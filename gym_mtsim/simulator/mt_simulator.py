@@ -421,6 +421,7 @@ class MtSimulator:
         self.end = end
         
         data_dir = os.path.join(os.path.dirname(__file__), '..', 'data_cache')
+        import os
         os.makedirs(data_dir, exist_ok=True)
         total_pairs = len(self.symbols) * len(self.timeframes)
         local_pairs = []
@@ -440,12 +441,23 @@ class MtSimulator:
                 for symbol, tf, cache_file in local_pairs:
                     try:
                         self.symbols_info[symbol] = _get_symbol_info(symbol)
-                        df = pd.read_pickle(cache_file)
+                        self.symbols_info[symbol] = _get_symbol_info(symbol)
+                        cache_dir = os.path.join(os.path.dirname(__file__), '..', 'data_cache')
+                        cache_dir = os.path.abspath(cache_dir)
+                        cache_file = f"{symbol}_{tf}_none_none.pkl"
+                        cache_path = os.path.join(cache_dir, cache_file)
+                        print(f"[MtSimulator] Attempting to load cache for {symbol} {tf} from: {cache_path}")
                         self.symbols_data[(symbol, tf)] = df
                         pbar.update(1)
                     except Exception as e:
                         raise RuntimeError(f"Failed to load local data for {symbol}: {e}")
 
+                        print(f"[MtSimulator] Could not load symbol info from MT5 for {symbol}: {e}")
+                        if os.path.exists(cache_path):
+                            print(f"[MtSimulator] Found cache file for {symbol} {tf}: {cache_path}")
+                        else:
+                            print(f"[MtSimulator] Cache file NOT FOUND for {symbol} {tf}: {cache_path}")
+                        raise RuntimeError(f"Failed to load local data for {symbol}: {e}\n[MtSimulator] Looked for cache at: {cache_path}")
         if download_pairs:
             with tqdm(total=len(download_pairs), desc="Downloading market data", unit="pair") as pbar:
                 for symbol, tf, cache_file in download_pairs:
