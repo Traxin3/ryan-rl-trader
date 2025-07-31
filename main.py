@@ -92,7 +92,7 @@ if __name__ == "__main__":
         vf_coef=0.5,
         verbose=1,
         tensorboard_log=log_dir,
-        device='',
+        device='auto',
     )
     
     new_logger = configure(log_dir, ["stdout", "tensorboard"])
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     
     try:
         model.learn(
-            total_timesteps=200000,
+            total_timesteps=1_500_000,
             callback=callback,
             progress_bar=True,
             reset_num_timesteps=False
