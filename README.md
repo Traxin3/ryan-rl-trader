@@ -41,7 +41,7 @@ Honestly, I'm uploading this to GitHub because I need some of that sweet, sweet 
 
 ## How to Use
 
-1. **Install requirements** (see `requirements.txt`).
+1. **Install requirements** (see `requirements.txt` which isn't uploaded, so u on your own on this one ;).
 2. **Configure your environment** in `main.py` (symbols, timeframes, window size, etc.).
 3. **Run training**:
    ```bash
