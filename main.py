@@ -92,7 +92,7 @@ if __name__ == "__main__":
         vf_coef=0.5,
         verbose=1,
         tensorboard_log=log_dir,
-        device='auto',
+        device='',
     )
     
     new_logger = configure(log_dir, ["stdout", "tensorboard"])
@@ -110,7 +110,7 @@ if __name__ == "__main__":
         print("Training interrupted. Saving model...")
         model.save("ppo_transformer_mtsim_interrupted")
     
-    print("\n=== Final Evaluation ===")
+        print("\n=== Final Evaluation ===")
     model = PPO.load("ppo_transformer_mtsim_final", env=venv)
     obs = venv.reset()
     rewards = []
@@ -118,11 +118,11 @@ if __name__ == "__main__":
 
     while True:
         action, _states = model.predict(obs, deterministic=True)
-        obs, reward, done, truncated, info = venv.step(action)
+        obs, reward, done, info = venv.step(action)  # Changed from 5 to 4 outputs
         rewards.append(reward)
         steps += 1
         
-        if done or truncated or steps >= 10000:
+        if done or steps >= 10000:
             break
 
     print(f"Evaluation completed. Total reward: {sum(rewards):.2f} over {steps} steps")
