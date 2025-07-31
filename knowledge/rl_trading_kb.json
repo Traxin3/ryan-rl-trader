@@ -1,0 +1,36 @@
+
+[
+  {
+    "description": "Agent shows increasing reward variance with stagnant average reward",
+    "solution": "Reduce learning rate slightly to stabilize training",
+    "adjustments": [
+      {
+        "parameter": "learning_rate",
+        "action": "decrease",
+        "percentage": 10
+      }
+    ]
+  },
+  {
+    "description": "Agent shows consistent but low rewards with little exploration",
+    "solution": "Increase entropy coefficient to encourage exploration",
+    "adjustments": [
+      {
+        "parameter": "ent_coef",
+        "action": "increase",
+        "percentage": 15
+      }
+    ]
+  },
+  {
+    "description": "Agent shows initial rapid improvement then plateaus",
+    "solution": "Adjust clip range and potentially increase batch size",
+    "adjustments": [
+      {
+        "parameter": "clip_range",
+        "action": "increase",
+        "percentage": 5
+      }
+    ]
+  }
+]

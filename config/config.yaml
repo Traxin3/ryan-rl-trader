@@ -1,4 +1,4 @@
-# PPO Hyperparameters
+# config/config.yaml
 ppo:
   learning_rate: 0.0001
   n_steps: 1024
@@ -12,9 +12,13 @@ ppo:
   max_grad_norm: 0.5
   vf_coef: 0.25
 
-# Environment
 env:
   symbols: ["EURUSD"]
   timeframes: [1, 5, 15]
   window_size: 30
   max_leverage: 5.0
+
+coach:
+  llm_model: "EleutherAI/gpt-neo-1.3B"
+  consult_frequency: 10  # Consult coach every 10 episodes
+  max_adjustment_percent: 10  # Max % change per adjustment

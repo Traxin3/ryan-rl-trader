@@ -4,7 +4,6 @@ import torch
 MODEL_NAME = "EleutherAI/gpt-neo-1.3B"  
 
 
-# Load tokenizer and model
 print(f"Loading {MODEL_NAME}...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
@@ -14,7 +13,6 @@ model.to(device)
 
 print("Model loaded! Start chatting (type 'quit' to exit).")
 
-# Simple chat loop
 history = ""
 while True:
     user_input = input("You: ")
