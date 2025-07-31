@@ -42,7 +42,7 @@ if __name__ == "__main__":
         venv = make_vec_env(lambda: create_env(config), n_envs=1)
         model = create_ppo_model(venv, config)
         
-        model.learn(total_timesteps=1_500_000)
+        model.learn(total_timesteps=1_500_000, progress_bar=True, verbose=1)
         model.save("ppo_transformer_mtsim_final")
         
     except Exception as e:
