@@ -450,7 +450,18 @@ class MtSimulator:
                                 self.symbols_info[symbol] = df.attrs['symbol_info']
                             else:
                                 # Fallback: create minimal SymbolInfo with required fields
-                                self.symbols_info[symbol] = SymbolInfo(name=symbol)
+                                class DummyMtSymbolInfo:
+                                    pass
+                                dummy = DummyMtSymbolInfo()
+                                dummy.name = symbol
+                                dummy.currency_margin = 'USD'
+                                dummy.currency_profit = 'USD'
+                                dummy.trade_contract_size = 100000.0
+                                dummy.volume_min = 0.01
+                                dummy.volume_max = 100.0
+                                dummy.volume_step = 0.01
+                                dummy.path = symbol
+                                self.symbols_info[symbol] = SymbolInfo(dummy)
                         self.symbols_data[(symbol, tf)] = pd.read_pickle(cache_file)
                         pbar.update(1)
                     except Exception as e:
