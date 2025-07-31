@@ -63,6 +63,14 @@ Honestly, I'm uploading this to GitHub because I need some of that sweet, sweet 
 ## Final Thoughts
 This project is a living, breathing RL research lab for trading. It's the product of endless curiosity, trial and error, and a refusal to give up. If you're on a similar journey, welcome aboard. Contributions, feedback, and PRs are always welcome!
 
+
+## 💬 Join the Discord
+
+Want to chat, ask questions, or cry about overfitting together? Join the Project Ryan Discord:
+
+👉 **[Join Here](https://discord.gg/V9cFvZt7)**
+
+
 Ill leave a quote down to sound cool.
 
 ---
