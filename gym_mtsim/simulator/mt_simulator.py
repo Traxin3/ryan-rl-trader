@@ -1,3 +1,21 @@
+import platform
+# Detect if MetaTrader5 is available (for Colab/cloud compatibility)
+MT5_AVAILABLE = False
+if platform.system() == "Windows":
+    try:
+        import MetaTrader5 as mt5
+        MT5_AVAILABLE = True
+    except ImportError:
+        pass
+
+# Only import fetch_mt5_rates and _get_symbol_info if MT5 is available
+if MT5_AVAILABLE:
+    from gym_mtsim.metatrader.api import fetch_mt5_rates, _get_symbol_info
+else:
+    def fetch_mt5_rates(*args, **kwargs):
+        raise RuntimeError("MetaTrader5 is not available on this platform. Please use local cache.")
+    def _get_symbol_info(*args, **kwargs):
+        raise RuntimeError("MetaTrader5 is not available on this platform. Please use local cache.")
 from typing import List, Tuple, Dict, Any, Optional
 import os
 import pickle
@@ -9,7 +27,6 @@ from scipy.stats import linregress
 from ..metatrader import Timeframe, SymbolInfo, retrieve_data
 from .order import OrderType, Order
 from .exceptions import SymbolNotFound, OrderNotFound
-from gym_mtsim.metatrader.api import fetch_mt5_rates, _get_symbol_info
 
 
 class MtSimulator:

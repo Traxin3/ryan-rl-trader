@@ -1,3 +1,15 @@
+import platform
+
+# Detect if MetaTrader5 is available (for Colab/cloud compatibility)
+MT5_AVAILABLE = False
+if platform.system() == "Windows":
+    try:
+        import MetaTrader5 as mt5
+        MT5_AVAILABLE = True
+    except ImportError:
+        print("MetaTrader5 not installed. Will use local cache or skip MT5 features.")
+else:
+    print("MetaTrader5 is only available on Windows. Running in cloud/offline mode.")
 import os
 import numpy as np
 from stable_baselines3 import PPO
