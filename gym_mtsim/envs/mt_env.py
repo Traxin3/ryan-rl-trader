@@ -297,8 +297,8 @@ class MtEnv(gym.Env):
                 roi = order['profit'] / (order['margin'] + 1e-6)
                 trade_duration = order.get('holding_time', 1.0)  # in hours
                 
-                annualized_roi = ((1 + roi) ** (24*365/trade_duration)) - 1 if trade_duration > 0 else 0
-                
+                # annualized_roi = ((1 + roi) ** (24*365/trade_duration)) - 1 if trade_duration > 0 else 0
+                annualized_roi = (np.exp(np.log1p(roi) * (24*365/trade_duration))) - 1 if trade_duration > 0 else 0                
                 if len(self.trade_history) > 5:
                     recent_returns = np.array([t['profit']/t['margin'] for t in self.trade_history[-5:] if 'margin' in t])
                     if len(recent_returns) > 1:
