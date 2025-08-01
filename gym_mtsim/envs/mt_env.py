@@ -297,8 +297,18 @@ class MtEnv(gym.Env):
                 roi = order['profit'] / (order['margin'] + 1e-6)
                 trade_duration = order.get('holding_time', 1.0)  # in hours
                 
-                # annualized_roi = ((1 + roi) ** (24*365/trade_duration)) - 1 if trade_duration > 0 else 0
-                annualized_roi = (np.exp(np.log1p(roi) * (24*365/trade_duration))) - 1 if trade_duration > 0 else 0                
+                # Safe annualized ROI calculation
+                if trade_duration > 0:
+                    try:
+                        exponent = np.log1p(roi) * (24*365/trade_duration)
+                        # Clip exponent to avoid overflow (max ~700 for float64)
+                        exponent = np.clip(exponent, -700, 700)
+                        annualized_roi = np.exp(exponent) - 1
+                    except:
+                        annualized_roi = 0  # Fallback for any numerical errors
+                else:
+                    annualized_roi = 0
+
                 if len(self.trade_history) > 5:
                     recent_returns = np.array([t['profit']/t['margin'] for t in self.trade_history[-5:] if 'margin' in t])
                     if len(recent_returns) > 1:
@@ -309,8 +319,6 @@ class MtEnv(gym.Env):
                 
                 if roi > 0.01 and 'holding_time' in order:
                     trade_quality += self.early_close_bonus * min(1.0, 1.0 / (order['holding_time'] + 1e-6))
-        
-        self.episode_reward_components['trade_quality'].append(trade_quality)
         
         margin_level = self.simulator.margin_level
         risk_penalty = -0.3 * (10.0 - min(margin_level, 10.0)) ** 0.5 if margin_level < 10.0 else 0
@@ -374,7 +382,6 @@ class MtEnv(gym.Env):
         ) * timeframe_factor
         
         return float(np.clip(total_reward * self.reward_scaling, self.min_reward, self.max_reward))
-
     def _get_timeframe_factor(self) -> float:
         """Dynamic timeframe factor based on timeframe duration in minutes"""
         tf_minutes = min(self.timeframes)  # Use the most granular timeframe
