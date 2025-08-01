@@ -5,7 +5,6 @@ from gym_mtsim.envs.mt_env import MtEnv
 from stable_baselines3.common.env_util import make_vec_env
 
 def load_config():
-    # Try possible config file locations
     config_paths = [
         "config/config.yaml",  # Local development path
         "/content/ryan-rl-trader/config/config.yaml",  # Google Colab path

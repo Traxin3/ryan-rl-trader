@@ -1,6 +1,5 @@
 import os
 import platform
-# Detect if MetaTrader5 is available (for Colab/cloud compatibility)
 MT5_AVAILABLE = False
 if platform.system() == "Windows":
     try:
@@ -9,7 +8,6 @@ if platform.system() == "Windows":
     except ImportError:
         pass
 
-# Only import fetch_mt5_rates and _get_symbol_info if MT5 is available
 if MT5_AVAILABLE:
     from gym_mtsim.metatrader.api import fetch_mt5_rates, _get_symbol_info
 else:
@@ -439,17 +437,13 @@ class MtSimulator:
             with tqdm(total=len(local_pairs), desc="Loading local market data", unit="pair") as pbar:
                 for symbol, tf, cache_file in local_pairs:
                     try:
-                        # On Windows/MT5, get symbol info from MT5; otherwise, try to load from cache
                         if MT5_AVAILABLE:
                             self.symbols_info[symbol] = _get_symbol_info(symbol)
                         else:
-                            # Try to load SymbolInfo from the cache file, or fallback to minimal info
                             df = pd.read_pickle(cache_file)
-                            # Try to get symbol info from DataFrame attrs or columns, else fallback
                             if hasattr(df, 'attrs') and 'symbol_info' in df.attrs:
                                 self.symbols_info[symbol] = df.attrs['symbol_info']
                             else:
-                                # Fallback: create minimal SymbolInfo with required fields
                                 class DummyMtSymbolInfo:
                                     pass
                                 dummy = DummyMtSymbolInfo()
