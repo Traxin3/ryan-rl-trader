@@ -42,7 +42,7 @@ This will:
 - Open the dashboard in your browser
 - Provide real-time control over the RL system
 
-### 3. Run Training Mode
+### 3. Run Training Mode(if you do not any gui, just flavorless)
 
 ```bash
 # Run training without GUI(lame mode)
