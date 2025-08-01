@@ -1,78 +1,200 @@
-# Project Ryan (gym-mtsim, Reinvented)
+# Project Ryan (gym-mtsim, Reinvented, again) - this time with GUI Dashboard
+
+A comprehensive Reinforcement Learning trading system with a futuristic Next.js dashboard for real-time monitoring and control.
+
+## Features
+
+### 🚀 Core RL System
+- **PPO Algorithm**: Proximal Policy Optimization with Transformer architecture, but will soon be updated to support Multi-Agents(Yeah soon)
+- **Multi-timeframe Analysis**: Support for multiple timeframes (1m, 5m, 15m, 1h, etc.)
+- **Advanced Feature Engineering**: 100+ core features with PCA optimization
+- **Risk Management**: Dynamic stop-loss, take-profit, and position sizing
+- **Market Structure Analysis**: Liquidity based features
+
+### 🎛️ GUI Dashboard
+- **Real-time Monitoring**: Live metrics, performance charts, and system status
+- **Training Control**: Start/stop training, save models, export data
+- **Configuration Management**: Edit model parameters, environment settings
+- **History Tracking**: Compare training runs, view performance metrics
+- **System Monitoring**: GPU/CPU usage, memory monitoring
+- **Futuristic UI**: Animated components, smooth transitions, modern design
+
+## Quick Start
+
+### 1. Install Dependencies
+
+```bash
+# Install Python dependencies
+git clone https://github.com/Traxin3/ryan-rl-trader
 
 
+```
 
-This project is the result of years of relentless research, experimentation, and iteration in the field of Reinforcement Learning (RL) for financial trading.  
+### 2. Run in GUI Mode
 
-The environment is inspired by [AminHP/gym-mtsim](https://github.com/AminHP/gym-mtsim), but has been **heavily modified and expanded** to handle modern RL workflows, proper feature engineering, and real-world trading constraints.  
+```bash
+# Start the almost cool looking dashboard
+python main.py --gui
+```
 
-Meanwhile, everyone’s been off playing with LLMs and generating anime pictures, and I’ve been here crying over getting a model that doesn’t overfit, a sane environment, and features that actually make sense.
+This will:
+- Start the Next.js development server on `http://localhost:3000`
+- Open the dashboard in your browser
+- Provide real-time control over the RL system
 
+### 3. Run Training Mode
 
+```bash
+# Run training without GUI(lame mode)
+python main.py --train
 
-Honestly, I'm uploading this to GitHub because I need some of that sweet, sweet GitHub computer juice. But the real goal is to push this codebase toward **actual live deployment**. There are still many updates and improvements to come, but this is a major milestone, for me anyway.
+# Or run with default settings(simple life mode)
+python main.py
+```
 
-## Technical Overview
+## Dashboard Features
 
-### Environment
-- **Custom RL Environment**: Built on top of `gymnasium`, inspired by `gym-mtsim` but with major enhancements for multi-symbol, multi-timeframe, and market-structure-aware trading.
-- **Simulator**: Realistic order management, margin/leverage, and tick-by-tick simulation using historical data. Supports both local data caching and cloud/offline workflows with detailed tqdm progress bars for both loading and downloading data.
-- **Feature Engineering**: 
-  - Robust, compressed, and cached feature extraction pipeline.
-  - Uses `VarianceThreshold`, `StandardScaler`, and `PCA` to reduce 30k+ raw features to a compact latent space.
-  - Market structure, liquidity, risk, and temporal features are all included.
-  - Feature cache is validated for shape and parameters to avoid unnecessary recomputation.
+### 📊 Overview Tab
+- **Real-time Metrics**: Balance, equity, win rate, Sharpe ratio
+- **Control Panel**: Start/stop training, save models, export data
+- **Performance Charts**: Live portfolio performance visualization
+- **System Status**: GPU/CPU usage, memory monitoring
 
-### Model
-- **Policy**: Transformer-based feature extractor (`TransformerFeatureExtractor`) for handling temporal dependencies in price/feature windows.
-- **RL Algorithm**: Proximal Policy Optimization (PPO) from `stable-baselines3`.
-- **Custom Policy**: `TransformerPolicy` with separate actor/critic networks and a transformer encoder for feature extraction.
-- **Training**: Supports vectorized environments, TensorBoard logging, and custom risk metrics (win rate, Sharpe, Sortino, drawdown, etc.).
-- **Evaluation**: Includes detailed evaluation loop and advanced rendering for visualizing agent performance.
+### 🎯 Training Tab
+- **Training Status**: Real-time progress, steps, episodes
+- **Model Configuration**: Edit PPO hyperparameters
+- **Live Metrics**: Current reward, win rate, performance indicators
 
-### Data Handling
-- **Symbols & Timeframes**: Easily configurable for any symbol/timeframe combination.
-- **Local Caching**: All market data is cached locally for fast reloads; tqdm progress bars show both loading and downloading status.
-- **Offline/Cloud Ready**: Can fetch data from MetaTrader 5 or load from local cache, making it suitable for both research and deployment.
+### 📈 Metrics Tab
+- **Advanced Metrics**: Sortino ratio, profit factor, volatility
+- **Trade Analysis**: Average trade profit, holding times
+- **Risk Metrics**: Maximum drawdown, risk-adjusted returns
 
-### Logging & Metrics
-- **TensorBoard**: Logs all key metrics, including custom risk metrics, for easy experiment tracking. 
-- **Custom Callbacks**: `TensorboardMetricsCallback` tracks win rate, average profit, drawdown, Sharpe/Sortino ratios, and more. -> Uhm not sure if this even works
+### ⚙️ Configuration Tab
+- **Environment Settings**: Symbols, timeframes, window size
+- **Model Parameters**: Learning rate, batch size, epochs
+- **Risk Settings**: Max leverage, reward scaling
 
-## How to Use
+### 📚 History Tab
+- **Training History**: View past training runs
+- **Performance Comparison**: Compare different model versions
+- **Export Options**: Download models and data
 
-1. **Install requirements** (see `requirements.txt` which isn't uploaded, so u on your own on this one ;).
-2. **Configure your environment** in `main.py` (symbols, timeframes, window size, etc.).
-3. **Run training**:
-   ```bash
-   python main.py
-   ```
-4. **Monitor progress** in TensorBoard:
-   ```bash
-   tensorboard --logdir=./tensorboard_logs/
-   ```
-5. **Evaluate and visualize** results after training.
+### 🖥️ System Tab
+- **Resource Monitoring**: GPU, CPU, memory usage
+- **System Status**: Environment connectivity, data feed status
+- **Logging**: Real-time system logs
 
-## Roadmap
-- [ ] Live trading integration (MetaTrader, broker APIs)
-- [ ] More advanced risk management and position sizing
-- [ ] Hyperparameter search and experiment tracking
-- [ ] More robust backtesting and slippage modeling
-- [ ] Improved documentation and tutorials
+## Configuration
 
-## Final Thoughts
-This project is a living, breathing RL research lab for trading. It's the product of endless curiosity, trial and error, and a refusal to give up. If you're on a similar journey, welcome aboard. Contributions, feedback, and PRs are always welcome!
+The system uses `config/config.yaml` for all settings:
 
+```yaml
+# PPO Hyperparameters
+ppo:
+  learning_rate: 0.0004
+  n_steps: 2048
+  batch_size: 256
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  max_grad_norm: 0.5
+  vf_coef: 0.25
 
-## 💬 Join the Discord
+# Environment
+env:
+  symbols: ["EURUSD"]
+  timeframes: [15]
+  window_size: 50
+  max_leverage: 2.0
+  reward_scaling: 1.0
+  risk_adjusted_reward: true
+```
 
-Want to chat, ask questions, or cry about overfitting together? Join the Project Ryan Discord:
+## Architecture
 
-👉 **[Join Here](https://discord.gg/V9cFvZt7)**
+### RL Components
+- **MtEnv**: Custom Gym environment for MetaTrader simulation
+- **TransformerPolicy**: PPO with Transformer feature extractor
+- **MtSimulator**: Advanced trading simulator with market structure analysis
+- **FeatureEngine**: Optimized feature extraction with caching
 
+### Dashboard Components
+- **Next.js App**: Modern React framework with server-side rendering
+- **Framer Motion**: Smooth animations and transitions
+- **Recharts**: Interactive data visualization
+- **Lucide React**: Beautiful icon library
+- **Tailwind CSS**: Utility-first styling
 
-Ill leave a quote down to sound cool.
+### API Integration
+- **Training API**: Control training processes
+- **Config API**: Manage configuration files
+- **Metrics API**: Real-time performance data
+- **System API**: Resource monitoring
+
+## Development
+
+### Adding New Features
+
+1. **RL System**: Modify `gym_mtsim/envs/mt_env.py` for new environment features
+2. **Model**: Update `model/transformer.py` for new architectures
+3. **Dashboard**: Add new components in `ryan-dash/app/`
+4. **API**: Create new routes in `ryan-dash/app/api/`
+
+### Customization
+
+- **UI Theme**: Modify `ryan-dash/app/globals.css` for styling
+- **Metrics**: Add new metrics in the dashboard components
+- **Charts**: Integrate additional Recharts components
+- **Animations**: Use Framer Motion for custom animations
+
+## Performance
+
+### Optimization Features
+- **Feature Caching**: Automatic caching of computed features
+- **PCA Optimization**: Dimensionality reduction for efficiency
+- **Multi-processing**: Parallel feature computation
+- **Memory Management**: Efficient data structures and cleanup
+
+### Monitoring
+- **Real-time Metrics**: Live performance tracking
+- **Resource Usage**: GPU/CPU/memory monitoring
+- **Training Progress**: Step-by-step progress tracking
+- **Error Handling**: Comprehensive error reporting
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Dashboard not starting**: Check Node.js installation and dependencies
+2. **Training errors**: Verify Python dependencies and CUDA installation
+3. **Config issues**: Ensure `config/config.yaml` exists and is valid
+4. **Memory issues**: Reduce batch size or window size
+
+### Debug Mode
+
+```bash
+# Run with verbose logging
+python main.py --train --verbose
+
+# Check dashboard logs
+cd ryan-dash && npm run dev
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
 
-*“The markets are never wrong, only opinions are.”* — Jesse Livermore
+**🚀 Ready to trade with AI? Start the GUI and begin your RL trading journey!**

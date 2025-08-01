@@ -297,11 +297,9 @@ class MtEnv(gym.Env):
                 roi = order['profit'] / (order['margin'] + 1e-6)
                 trade_duration = order.get('holding_time', 1.0)  # in hours
                 
-                # Safe annualized ROI calculation
                 if trade_duration > 0:
                     try:
                         exponent = np.log1p(roi) * (24*365/trade_duration)
-                        # Clip exponent to avoid overflow (max ~700 for float64)
                         exponent = np.clip(exponent, -700, 700)
                         annualized_roi = np.exp(exponent) - 1
                     except:
