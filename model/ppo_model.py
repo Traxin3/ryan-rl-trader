@@ -17,5 +17,6 @@ def create_ppo_model(env, config):
         policy=TransformerPolicy,
         env=env,
         **config['ppo'],
-        device='auto'
+        device='auto',
+        verbose=1,
     )
