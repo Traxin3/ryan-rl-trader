@@ -853,7 +853,7 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-xl font-bold text-white flex items-center">
             <Zap className="w-6 h-6 mr-2 text-blue-400" />
-            RL Trader
+            Ryan RL
           </h1>
           <button
             onClick={() => setSidebarOpen(false)}
@@ -1623,7 +1623,7 @@ export default function Dashboard() {
                   <ChevronRight className="w-5 h-5 text-gray-400" />
                 </motion.button>
               )}
-              <h1 className="text-xl font-bold text-white">RL Trading Dashboard</h1>
+              <h1 className="text-xl font-bold text-white">Ryan-RL Trading Dashboard</h1>
             </div>
             
             <div className="flex items-center space-x-4">
