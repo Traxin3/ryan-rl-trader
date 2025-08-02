@@ -1,0 +1,18 @@
+# Backtest configuration
+backtest:
+  # Model to use for backtesting
+  model_path: "ppo_transformer_mtsim_final"
+  
+  # Time period for backtest (optional - uses env default if not specified)
+  test_start: "2023-01-01"
+  test_end: "2023-06-30"
+  
+  # Specific symbol/timeframe to backtest (optional - uses env config if not specified)
+  symbol: "EURUSD"
+  timeframe: 15
+  
+  # Output settings
+  output:
+    report_path: "backtest_results/report.html"
+    save_trades: true
+    save_equity_curve: true

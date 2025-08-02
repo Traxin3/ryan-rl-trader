@@ -1,200 +1,175 @@
-# Project Ryan (gym-mtsim, Reinvented, again) - this time with GUI Dashboard
+# 🚀 Project Ryan – (gym-mtsim, Reinvented, again)
 
-A comprehensive Reinforcement Learning trading system with a futuristic Next.js dashboard for real-time monitoring and control.
+[![Project Status](https://img.shields.io/badge/Status-🚧_In_Development-orange?style=for-the-badge)]()  
+[![Made with Python](https://img.shields.io/badge/Python-3.10-blue?style=for-the-badge&logo=python)]()  
+[![Dashboard](https://img.shields.io/badge/Next.js-Futuristic_Dashboard-black?style=for-the-badge&logo=next.js)]()  
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
 
-## Features
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?size=24&duration=4000&pause=1000&color=00FFD1&center=true&vCenter=true&width=650&lines=🤖+Reinforcement+Learning+Trading;🎛️+Real-Time+Next.js+Dashboard;📊+Now+with+Professional+Backtesting">
+</p>
+
+---
+
+## ✨ Features
 
 ### 🚀 Core RL System
-- **PPO Algorithm**: Proximal Policy Optimization with Transformer architecture, but will soon be updated to support Multi-Agents(Yeah soon)
-- **Multi-timeframe Analysis**: Support for multiple timeframes (1m, 5m, 15m, 1h, etc.)
-- **Advanced Feature Engineering**: 100+ core features with PCA optimization
-- **Risk Management**: Dynamic stop-loss, take-profit, and position sizing
-- **Market Structure Analysis**: Liquidity based features
+- **PPO Algorithm** → Transformer-powered PPO (Multi-Agent coming soon)
+- **Multi-timeframe Analysis** → 1m, 5m, 15m, 1h, etc.
+- **Feature Engineering** → 100+ features + PCA optimization
+- **Risk Management** → Dynamic SL/TP + position sizing
+- **Market Structure Analysis** → Liquidity-based signals
 
 ### 🎛️ GUI Dashboard
-- **Real-time Monitoring**: Live metrics, performance charts, and system status
-- **Training Control**: Start/stop training, save models, export data
-- **Configuration Management**: Edit model parameters, environment settings
-- **History Tracking**: Compare training runs, view performance metrics
-- **System Monitoring**: GPU/CPU usage, memory monitoring
-- **Futuristic UI**: Animated components, smooth transitions, modern design
+- **Live Monitoring** → Balance, equity, Sharpe ratio, and system metrics
+- **Training Control** → Start/stop, save models, export data
+- **Config Management** → Edit model/env params live
+- **History Tracking** → Compare training runs & performance
+- **System Monitoring** → GPU/CPU/memory live
+- **Smooth UI** → Subtle animations, clean layout
 
-## Quick Start
+### 📊 New: VectorBT Backtesting
+- **Professional Analytics**: Sharpe, Sortino, max drawdown metrics
+- **Interactive Reports**: HTML reports with trade-by-trade analysis
+- **Flexible Configuration**: Test specific symbols, timeframes, and periods
+- **Visualization**: Equity curves, underwater plots, and trade timelines
 
-### 1. Install Dependencies
+---
 
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?size=20&duration=3000&pause=1000&color=FFB800&center=true&vCenter=true&width=600&lines=🚀+Quick+Start">
+</p>
+
+### 1️⃣ Install Dependencies
 ```bash
-# Install Python dependencies
 git clone https://github.com/Traxin3/ryan-rl-trader
-
-
+cd ryan-rl-trader
+pip install -r requirements.txt
 ```
 
-### 2. Run in GUI Mode
-
+### 2️⃣ Run Modes
+#### GUI Mode (Recommended)
 ```bash
-# Start the almost cool looking dashboard
 python main.py --gui
 ```
+- Starts dashboard at http://localhost:3000
+- Real-time monitoring and control
+- Visualize training and backtest results
 
-This will:
-- Start the Next.js development server on `http://localhost:3000`
-- Open the dashboard in your browser
-- Provide real-time control over the RL system
-
-### 3. Run Training Mode(if you do not any gui, just flavorless)
-
+#### Training Mode
 ```bash
-# Run training without GUI(lame mode)
 python main.py --train
-
-# Or run with default settings(simple life mode)
-python main.py
 ```
+- Headless training session
+- Saves model to `ppo_transformer_mtsim_final`
+- TensorBoard logging available
 
-## Dashboard Features
+#### Backtest Mode
+```bash
+python main.py --backtest
+```
+- Runs backtest with default settings
+- Generates comprehensive HTML report
+- Saves results to `backtest_results/`
 
-### 📊 Overview Tab
-- **Real-time Metrics**: Balance, equity, win rate, Sharpe ratio
-- **Control Panel**: Start/stop training, save models, export data
-- **Performance Charts**: Live portfolio performance visualization
-- **System Status**: GPU/CPU usage, memory monitoring
+#### Combined Mode
+```bash
+python main.py --gui --train --backtest
+```
+- Runs all components together
+- Dashboard shows live training and backtest results
 
-### 🎯 Training Tab
-- **Training Status**: Real-time progress, steps, episodes
-- **Model Configuration**: Edit PPO hyperparameters
-- **Live Metrics**: Current reward, win rate, performance indicators
+### 📊 Dashboard Tabs
+- ✅ **Overview** – Metrics, GPU/CPU, charts
+- 🎯 **Training** – Progress, hyperparameters, rewards
+- 📈 **Backtest (NEW)** – Interactive HTML reports, strategy comparisons
+- ⚙️ **Config** – Symbols, timeframes, risk settings
+- 📚 **History** – Training runs, performance comparisons
+- 🖥 **System** – Logs & resource usage
 
-### 📈 Metrics Tab
-- **Advanced Metrics**: Sortino ratio, profit factor, volatility
-- **Trade Analysis**: Average trade profit, holding times
-- **Risk Metrics**: Maximum drawdown, risk-adjusted returns
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?size=20&duration=3000&pause=1000&color=5BFF7F&center=true&vCenter=true&width=650&lines=⚙️+Configuration+via+YAML">
+</p>
 
-### ⚙️ Configuration Tab
-- **Environment Settings**: Symbols, timeframes, window size
-- **Model Parameters**: Learning rate, batch size, epochs
-- **Risk Settings**: Max leverage, reward scaling
-
-### 📚 History Tab
-- **Training History**: View past training runs
-- **Performance Comparison**: Compare different model versions
-- **Export Options**: Download models and data
-
-### 🖥️ System Tab
-- **Resource Monitoring**: GPU, CPU, memory usage
-- **System Status**: Environment connectivity, data feed status
-- **Logging**: Real-time system logs
-
-## Configuration
-
-The system uses `config/config.yaml` for all settings:
-
+### 🔧 Main Config (`config/config.yaml`)
 ```yaml
-# PPO Hyperparameters
 ppo:
   learning_rate: 0.0004
   n_steps: 2048
   batch_size: 256
-  n_epochs: 5
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  ent_coef: 0.01
-  max_grad_norm: 0.5
-  vf_coef: 0.25
 
-# Environment
 env:
   symbols: ["EURUSD"]
   timeframes: [15]
-  window_size: 50
   max_leverage: 2.0
-  reward_scaling: 1.0
-  risk_adjusted_reward: true
 ```
 
-## Architecture
-
-### RL Components
-- **MtEnv**: Custom Gym environment for MetaTrader simulation
-- **TransformerPolicy**: PPO with Transformer feature extractor
-- **MtSimulator**: Advanced trading simulator with market structure analysis
-- **FeatureEngine**: Optimized feature extraction with caching
-
-### Dashboard Components
-- **Next.js App**: Modern React framework with server-side rendering
-- **Framer Motion**: Smooth animations and transitions
-- **Recharts**: Interactive data visualization
-- **Lucide React**: Beautiful icon library
-- **Tailwind CSS**: Utility-first styling
-
-### API Integration
-- **Training API**: Control training processes
-- **Config API**: Manage configuration files
-- **Metrics API**: Real-time performance data
-- **System API**: Resource monitoring
-
-## Development
-
-### Adding New Features
-
-1. **RL System**: Modify `gym_mtsim/envs/mt_env.py` for new environment features
-2. **Model**: Update `model/transformer.py` for new architectures
-3. **Dashboard**: Add new components in `ryan-dash/app/`
-4. **API**: Create new routes in `ryan-dash/app/api/`
-
-### Customization
-
-- **UI Theme**: Modify `ryan-dash/app/globals.css` for styling
-- **Metrics**: Add new metrics in the dashboard components
-- **Charts**: Integrate additional Recharts components
-- **Animations**: Use Framer Motion for custom animations
-
-## Performance
-
-### Optimization Features
-- **Feature Caching**: Automatic caching of computed features
-- **PCA Optimization**: Dimensionality reduction for efficiency
-- **Multi-processing**: Parallel feature computation
-- **Memory Management**: Efficient data structures and cleanup
-
-### Monitoring
-- **Real-time Metrics**: Live performance tracking
-- **Resource Usage**: GPU/CPU/memory monitoring
-- **Training Progress**: Step-by-step progress tracking
-- **Error Handling**: Comprehensive error reporting
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Dashboard not starting**: Check Node.js installation and dependencies
-2. **Training errors**: Verify Python dependencies and CUDA installation
-3. **Config issues**: Ensure `config/config.yaml` exists and is valid
-4. **Memory issues**: Reduce batch size or window size
-
-### Debug Mode
-
-```bash
-# Run with verbose logging
-python main.py --train --verbose
-
-# Check dashboard logs
-cd ryan-dash && npm run dev
+### 📈 Backtest Config (`config/backtest_config.yaml`)
+```yaml
+backtest:
+  model_path: "ppo_transformer_mtsim_final"
+  test_start: "2023-01-01"
+  test_end: "2023-06-30"
+  output:
+    report_path: "backtest_results/report.html"
 ```
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+### 🛠 Command Line Options
+| Option        | Description                  | Example                         |
+|---------------|------------------------------|---------------------------------|
+| `--gui`       | Start the dashboard          | `python main.py --gui`         |
+| `--train`     | Run training session         | `python main.py --train`       |
+| `--backtest`  | Run backtest                | `python main.py --backtest`    |
+| `--test_start`| Backtest start date         | `--test_start "2023-01-01"`   |
+| `--test_end`  | Backtest end date           | `--test_end "2023-06-30"`     |
+| `--symbol`    | Override symbol             | `--symbol EURUSD`             |
+| `--timeframe` | Override timeframe          | `--timeframe 5`               |
 
 ---
 
-**🚀 Ready to trade with AI? Start the GUI and begin your RL trading journey!**
+## 🏗 Architecture
+### RL Core
+- **MtEnv** → Custom Gym environment for MetaTrader sim
+- **TransformerPolicy** → PPO + Transformer
+- **MtSimulator** → Advanced trading simulator
+- **FeatureEngine** → Feature caching + PCA
+
+### Dashboard Core
+- **Next.js + Tailwind** → Clean futuristic UI
+- **Framer Motion** → Subtle transitions
+- **Recharts** → Live metrics
+- **Lucide React** → Icon library
+
+### Backtesting Core
+- **VectorBT Integration** → Professional-grade backtesting
+- **Trade Analytics** → Sharpe, Sortino, drawdowns
+- **HTML Reports** → Interactive trade exploration
+
+---
+
+## 🛠 Troubleshooting
+- **Dashboard won’t start?** → Check Node.js install
+- **Training errors?** → Validate Python deps & CUDA
+- **Memory issues?** → Lower `batch_size` or `window_size`
+- Run debug mode:
+```bash
+python main.py --train --verbose
+cd ryan-dash && npm run dev
+```
+
+---
+
+## 🤝 Contributing
+1. Fork repo
+2. Create feature branch
+3. Make changes
+4. Open PR 🚀
+
+---
+
+## 📜 License
+MIT License – see [LICENSE](LICENSE)
+
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?size=22&duration=3000&pause=1000&color=FF00A2&center=true&vCenter=true&width=700&lines=🚀+Ready+to+Trade+with+AI%3F;🎛️+Fire+up+the+Dashboard+and+Backtest+Strategies!">
+</p>
