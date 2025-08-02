@@ -1,7 +1,7 @@
 # 🚀 Project Ryan – (gym-mtsim, Reinvented, again)
 
 [![Project Status](https://img.shields.io/badge/Status-🚧_In_Development-orange?style=for-the-badge)]()  
-[![Made with Python](https://img.shields.io/badge/Python-3.10-blue?style=for-the-badge&logo=python)]()  
+[![Made with Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge&logo=python)]()  
 [![Dashboard](https://img.shields.io/badge/Next.js-Futuristic_Dashboard-black?style=for-the-badge&logo=next.js)]()  
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
 
