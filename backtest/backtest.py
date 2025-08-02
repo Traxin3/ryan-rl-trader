@@ -82,7 +82,7 @@ class VectorBTBacktester:
     
     def _analyze_with_vectorbt(self, env: MtEnv) -> Dict:
         """
-        Convert MT4 simulator results to vectorbt format and analyze
+        Convert MT5 simulator results to vectorbt format and analyze
         
         Args:
             env: MtEnv instance with completed backtest
