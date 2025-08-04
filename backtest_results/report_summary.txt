@@ -1,0 +1,17 @@
+
+Backtest Results Summary
+Generated: 2025-08-04 13:50:33
+
+Performance Metrics:
+- Total Return: 0.00%
+- Annualized Return: 0.00%
+- Sharpe Ratio: inf
+- Sortino Ratio: inf
+- Max Drawdown: 0.00%
+- Win Rate: 0.00%
+- Profit Factor: 1.00
+
+Trade Statistics:
+- Total Trades: 2359
+- Winning Trades: 394
+- Losing Trades: 1965

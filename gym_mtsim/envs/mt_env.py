@@ -139,7 +139,8 @@ class MtEnv(gym.Env):
         volatility_penalty: float = 0.02,
         position_size_penalty: float = 0.01,
         min_tp_sl_ratio: float = 1.5,  # Minimum TP/SL ratio
-        atr_multiplier: float = 2.0     # ATR multiplier for SL
+        atr_multiplier: float = 2.0,     # ATR multiplier for SL
+        use_cached_features: bool = False  # Prefer cached features when available
     ) -> None:
         self.symbols = symbols
         self.timeframes = timeframes
@@ -163,6 +164,7 @@ class MtEnv(gym.Env):
         self.position_size_penalty = position_size_penalty
         self.min_tp_sl_ratio = min_tp_sl_ratio
         self.atr_multiplier = atr_multiplier
+        self.use_cached_features = use_cached_features
 
         self.multiprocessing_pool = Pool(multiprocessing_processes) if multiprocessing_processes else None
         self.render_mode = render_mode
@@ -285,11 +287,21 @@ class MtEnv(gym.Env):
         return observation, step_reward, False, self._truncated, info
 
     def _calculate_reward(self, orders_info: Dict, closed_orders_info: Dict) -> float:
+        """Enhanced reward calculation with volatility normalization and progressive penalties"""
         prev_info = self.history[-1]
         current_equity = self.simulator.equity
         
         equity_change = (current_equity - prev_info['equity']) / (prev_info['equity'] + 1e-6)
-        self.episode_reward_components['equity_change'].append(equity_change)
+        
+        if len(self.history) >= 20:
+            recent_equity = [h['equity'] for h in self.history[-20:]]
+            equity_returns = np.diff(recent_equity) / (np.array(recent_equity[:-1]) + 1e-6)
+            volatility = np.std(equity_returns) + 1e-6
+            normalized_equity_change = equity_change / volatility
+        else:
+            normalized_equity_change = equity_change
+            
+        self.episode_reward_components['equity_change'].append(normalized_equity_change)
         
         trade_quality = 0
         for symbol, closed_orders in closed_orders_info.items():
@@ -308,19 +320,39 @@ class MtEnv(gym.Env):
                     annualized_roi = 0
 
                 if len(self.trade_history) > 5:
-                    recent_returns = np.array([t['profit']/t['margin'] for t in self.trade_history[-5:] if 'margin' in t])
+                    recent_returns = np.array([t['profit']/t['margin'] for t in self.trade_history[-10:] if 'margin' in t])
                     if len(recent_returns) > 1:
                         sharpe_like = roi / (np.std(recent_returns) + 1e-6)
-                        trade_quality += 0.5 * np.sign(roi) * np.log1p(abs(sharpe_like))
+                        trade_quality += 0.6 * np.sign(roi) * np.log1p(abs(sharpe_like))
                 
-                trade_quality += 0.5 * np.sign(roi) * np.log1p(abs(annualized_roi))
+                trade_quality += 0.4 * np.sign(roi) * np.log1p(abs(annualized_roi))
                 
                 if roi > 0.01 and 'holding_time' in order:
-                    trade_quality += self.early_close_bonus * min(1.0, 1.0 / (order['holding_time'] + 1e-6))
+                    efficiency_bonus = self.early_close_bonus * min(1.0, roi / (order['holding_time'] + 1e-6))
+                    trade_quality += efficiency_bonus
+        
+        self.episode_reward_components['trade_quality'].append(trade_quality)
         
         margin_level = self.simulator.margin_level
-        risk_penalty = -0.3 * (10.0 - min(margin_level, 10.0)) ** 0.5 if margin_level < 10.0 else 0
-        self.episode_reward_components['risk_penalty'].append(risk_penalty)
+        
+        if margin_level < 5.0:
+            risk_penalty = -1.0 * (5.0 - margin_level) ** 2  # Severe penalty
+        elif margin_level < 10.0:
+            risk_penalty = -0.3 * (10.0 - margin_level) ** 1.5  # Moderate penalty
+        else:
+            risk_penalty = 0
+            
+        if self.max_drawdown > 0.15:  # > 15% drawdown
+            drawdown_penalty = -2.0 * (self.max_drawdown - 0.15) ** 2
+        elif self.max_drawdown > 0.10:  # 10-15% drawdown
+            drawdown_penalty = -0.5 * (self.max_drawdown - 0.10) ** 2
+        elif self.max_drawdown > 0.05:  # 5-10% drawdown
+            drawdown_penalty = -0.1 * (self.max_drawdown - 0.05) ** 2
+        else:
+            drawdown_penalty = 0
+            
+        total_risk_penalty = risk_penalty + drawdown_penalty * self.drawdown_penalty
+        self.episode_reward_components['risk_penalty'].append(total_risk_penalty)
         
         open_positions = len(self.simulator.orders)
         position_bonus = 0.05 * min(open_positions, len(self.symbols))
@@ -328,58 +360,71 @@ class MtEnv(gym.Env):
         unique_symbols = len({order.symbol for order in self.simulator.orders})
         diversification = self.diversification_bonus * unique_symbols / len(self.symbols)
         
-        drawdown_penalty = -self.drawdown_penalty * (self.max_drawdown ** 1.5)
-        volatility_penalty = -self.volatility_penalty * self.returns_volatility * 100
+        if len(self.history) >= 10:
+            recent_prices = [h.get('close_price', h.get('equity', 0)) for h in self.history[-10:]]
+            market_volatility = np.std(np.diff(recent_prices)) / (np.mean(recent_prices) + 1e-6)
+            
+            if market_volatility < 0.005:  # Low volatility
+                regime_factor = 0.8
+            elif market_volatility > 0.02:  # High volatility
+                regime_factor = 1.2
+            else:
+                regime_factor = 1.0
+        else:
+            regime_factor = 1.0
         
-        total_margin = sum(order.margin for order in self.simulator.orders)
-        position_size_penalty = -self.position_size_penalty * (total_margin / (self.simulator.balance + 1e-6))
+        consistency_bonus = 0
+        if len(self.trade_history) >= 5:
+            recent_trades = self.trade_history[-5:]
+            profits = [t['profit'] for t in recent_trades]
+            
+            if all(p > 0 for p in profits):
+                consistency_bonus = 0.2 * np.mean(profits) / (self.simulator.equity + 1e-6)
+            elif all(p < 0 for p in profits):
+                consistency_bonus = -0.1 * abs(np.mean(profits)) / (self.simulator.equity + 1e-6)
+                
+        self.episode_reward_components['consistency_bonus'].append(consistency_bonus)
+        
+        drawdown_severity = min(self.max_drawdown / 0.20, 1.0)  # Normalize to 20% max
+        
+        if drawdown_severity > 0.5:  # High drawdown - focus on risk
+            weights = {
+                'equity_change': 0.2,
+                'trade_quality': 0.2,
+                'risk_penalty': 0.4,  # Emphasize risk control
+                'position_bonus': 0.05,
+                'diversification': 0.05,
+                'consistency_bonus': 0.1
+            }
+        else:  # Normal conditions
+            weights = {
+                'equity_change': 0.35,
+                'trade_quality': 0.3,
+                'risk_penalty': 0.15,
+                'position_bonus': 0.05,
+                'diversification': 0.05,
+                'consistency_bonus': 0.1
+            }
+        
+        total_reward = (
+            weights['equity_change'] * normalized_equity_change + 
+            weights['trade_quality'] * trade_quality * self.trade_reward_multiplier + 
+            weights['risk_penalty'] * total_risk_penalty + 
+            weights['position_bonus'] * position_bonus +
+            weights['diversification'] * diversification +
+            weights['consistency_bonus'] * consistency_bonus
+        ) * regime_factor
         
         survival = self.survival_bonus if not self._truncated else 0
         leverage = self.simulator.margin / (self.simulator.balance + 1e-6)
         leverage_penalty = -self.leverage_penalty * (max(leverage - 1, 0) ** 2)
         
-        consistency_bonus = 0
-        if len(self.trade_history) >= 3:
-            last_three = [t['profit'] for t in self.trade_history[-3:]]
-            if all(p > 0 for p in last_three):
-                min_profit = min(abs(p) for p in last_three)
-                consistency_bonus = 0.5 * min_profit / (self.simulator.equity + 1e-6)
-        self.episode_reward_components['consistency_bonus'].append(consistency_bonus)
+        total_reward += survival + leverage_penalty
         
-        timeframe_factor = self._get_timeframe_factor()
-        self.timeframe_factors.append(timeframe_factor)
-        self.metrics_callback.timeframe_factors.append(timeframe_factor)
+        dynamic_max = self.max_reward * regime_factor
+        dynamic_min = self.min_reward * regime_factor
         
-        volatility_factor = min(1.0, max(0.1, self.returns_volatility * 10))
-        weights = {
-            'equity_change': 0.3 * volatility_factor,
-            'trade_quality': 0.25 * (2 - volatility_factor),
-            'risk_penalty': 0.15,
-            'position_bonus': 0.05,
-            'diversification': 0.05,
-            'drawdown_penalty': 0.05 + 0.05 * (1 - volatility_factor),
-            'volatility_penalty': 0.05 * volatility_factor,
-            'position_size_penalty': 0.03,
-            'survival': 0.02,
-            'leverage_penalty': 0.02,
-            'consistency_bonus': 0.03
-        }
-        
-        total_reward = (
-            weights['equity_change'] * equity_change + 
-            weights['trade_quality'] * trade_quality * self.trade_reward_multiplier + 
-            weights['risk_penalty'] * risk_penalty + 
-            weights['position_bonus'] * position_bonus +
-            weights['diversification'] * diversification +
-            weights['drawdown_penalty'] * drawdown_penalty +
-            weights['volatility_penalty'] * volatility_penalty +
-            weights['position_size_penalty'] * position_size_penalty +
-            weights['survival'] * survival +
-            weights['leverage_penalty'] * leverage_penalty +
-            weights['consistency_bonus'] * consistency_bonus
-        ) * timeframe_factor
-        
-        return float(np.clip(total_reward * self.reward_scaling, self.min_reward, self.max_reward))
+        return float(np.clip(total_reward * self.reward_scaling, dynamic_min, dynamic_max))
     def _get_timeframe_factor(self) -> float:
         """Dynamic timeframe factor based on timeframe duration in minutes"""
         tf_minutes = min(self.timeframes)  # Use the most granular timeframe
@@ -491,7 +536,20 @@ class MtEnv(gym.Env):
         """
         import os
         from tqdm import tqdm
+        
+        if self.use_cached_features:
+            cached_features = self.optimized_feature_engine.load_features()
+            if cached_features is not None:
+                print(f"✅ Loaded cached features with shape {cached_features.shape}")
+                return cached_features
+            else:
+                print("⚠️ No cached features found, will compute from scratch")
+        
         cache_path = self.optimized_feature_engine.cache_path
+        if os.path.exists(cache_path) and not self.use_cached_features:
+            print(f"📋 Cache exists at {cache_path} but computing fresh features as requested")
+        
+        print("🔧 Computing features from scratch...")
 
         data = self.prices
         dt_index = self.simulator.symbols_data[(self.symbols[0], self.timeframes[0])].reindex(self.time_points, method='ffill').index

@@ -1,20 +1,35 @@
-# PPO Hyperparameters
+# Enhanced PPO Hyperparameters for Trading
 ppo:
-  learning_rate: 0.0004
-  n_steps: 2048
-  batch_size: 256
-  n_epochs: 5
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  clip_range_vf: 0.1
-  ent_coef: 0.01
-  max_grad_norm: 0.5
-  vf_coef: 0.25
+  learning_rate: 0.0003     # Slightly lower for more stable learning
+  n_steps: 4096             # Increased for better sample efficiency in trading
+  batch_size: 512           # Larger batches for stable gradients
+  n_epochs: 10              # More epochs for better policy updates
+  gamma: 0.995              # Higher gamma for longer-term rewards in trading
+  gae_lambda: 0.98          # Higher GAE for better advantage estimation
+  clip_range: 0.15          # Slightly lower for more conservative updates
+  clip_range_vf: 0.2        # Allow more value function updates
+  ent_coef: 0.005           # Lower entropy for more focused exploration
+  max_grad_norm: 0.8        # Higher gradient norm for complex feature spaces
+  vf_coef: 0.5              # Higher value function coefficient for trading
 
-# Environment
+# Enhanced Environment Configuration
 env:
   symbols: ["EURUSD"]
   timeframes: [15]
-  window_size: 50
+  window_size: 100          # Increased for better pattern recognition
   max_leverage: 2.0
+  # Enhanced reward parameters
+  reward_scaling: 2.0
+  min_reward: -10.0
+  max_reward: 10.0
+  survival_bonus: 0.02
+  leverage_penalty: 0.02
+  trade_reward_multiplier: 2.0
+  risk_adjusted_reward: true
+  drawdown_penalty: 0.2
+  early_close_bonus: 0.1
+  diversification_bonus: 0.05
+  volatility_penalty: 0.05
+  position_size_penalty: 0.02
+  min_tp_sl_ratio: 2.0      # Higher risk-reward ratio
+  atr_multiplier: 1.5       # Tighter stops

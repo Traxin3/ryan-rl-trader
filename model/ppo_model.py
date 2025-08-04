@@ -8,8 +8,16 @@ class TransformerPolicy(ActorCriticPolicy):
             *args,
             **kwargs,
             features_extractor_class=TransformerFeatureExtractor,
-            features_extractor_kwargs=dict(d_model=128, nhead=4, num_layers=2, dropout=0.1),
-            net_arch=dict(pi=[256, 256], vf=[256, 256])
+            features_extractor_kwargs=dict(
+                d_model=256,        # Increased model size for better feature extraction
+                nhead=8,            # More attention heads for multi-aspect analysis
+                num_layers=3,       # Deeper network for complex patterns
+                dropout=0.1
+            ),
+            net_arch=dict(
+                pi=[512, 256, 128], # Larger policy network
+                vf=[512, 256, 128]  # Larger value network
+            )
         )
 
 def create_ppo_model(env, config):
@@ -19,4 +27,5 @@ def create_ppo_model(env, config):
         **config['ppo'],
         device='auto',
         verbose=1,
+        tensorboard_log="./tensorboard_logs/"  # Enable tensorboard logging
     )

@@ -717,6 +717,18 @@ class MtSimulator:
 
         return unit_price
 
+    def set_time_range(self, start: datetime, end: datetime) -> None:
+        """
+        Set the time range for the simulator. This is used for backtesting
+        to limit the data to a specific period.
+        
+        Args:
+            start: Start datetime for the backtest period
+            end: End datetime for the backtest period
+        """
+        self.start = start
+        self.end = end
+
     def _get_unit_symbol_info(self, currency: str) -> Optional[SymbolInfo]:
         for info in self.symbols_info.values():
             if currency in info.currencies and self.unit in info.currencies:

@@ -72,20 +72,40 @@ class OptimizedFeatureEngine:
         Loads features from cache file, if valid. Returns None if not valid.
         """
         cache_file = self.cache_path or 'feature_cache.pkl'
-        if not os.path.exists(cache_file):
-            base, ext = os.path.splitext(cache_file)
-            for fname in os.listdir(os.path.dirname(cache_file) or '.'):
+        
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    obj = pickle.load(f)
+                self.var_thresh = obj['var_thresh']
+                self.scaler = obj['scaler']
+                self.pca = obj['pca']
+                print(f"✅ Loaded features from exact cache: {cache_file}")
+                return obj['features']
+            except Exception as e:
+                print(f"⚠️ Error loading from {cache_file}: {e}")
+        
+        base, ext = os.path.splitext(cache_file)
+        cache_dir = os.path.dirname(cache_file) or '.'
+        
+        if os.path.exists(cache_dir):
+            for fname in os.listdir(cache_dir):
                 if fname.startswith(os.path.basename(base)) and fname.endswith(ext):
-                    cache_file = os.path.join(os.path.dirname(cache_file), fname)
-                    break
-            else:
-                return None
-        with open(cache_file, 'rb') as f:
-            obj = pickle.load(f)
-        self.var_thresh = obj['var_thresh']
-        self.scaler = obj['scaler']
-        self.pca = obj['pca']
-        return obj['features']
+                    full_path = os.path.join(cache_dir, fname)
+                    try:
+                        with open(full_path, 'rb') as f:
+                            obj = pickle.load(f)
+                        self.var_thresh = obj['var_thresh']
+                        self.scaler = obj['scaler']
+                        self.pca = obj['pca']
+                        print(f"✅ Loaded features from pattern cache: {full_path}")
+                        return obj['features']
+                    except Exception as e:
+                        print(f"⚠️ Error loading from {full_path}: {e}")
+                        continue
+        
+        print(f"❌ No valid cache found for {cache_file}")
+        return None
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         """
