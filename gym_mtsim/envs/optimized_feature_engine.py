@@ -1,120 +1,205 @@
 import numpy as np
 from sklearn.decomposition import PCA
-from sklearn.feature_selection import VarianceThreshold
-from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import VarianceThreshold, SelectKBest, f_regression
+from sklearn.preprocessing import StandardScaler, RobustScaler
 import os
 import pickle
 
 class OptimizedFeatureEngine:
     """
-    Optimized feature generator for RL trading environments.
-    - Removes near-constant features using VarianceThreshold.
-    - Standardizes features for PCA stability.
-    - Compresses features using PCA to a small latent space (default: 10 components).
-    - Uses caching for faster re-runs.
-
-    This reduces 30k+ features down to a tiny compressed state space 
-    while retaining high variance.
+    Enhanced feature generator for RL trading environments with improved compression and selection.
+    - Uses RobustScaler for better handling of outliers in financial data
+    - Combines statistical selection with PCA for optimal feature retention
+    - Implements adaptive component selection based on explained variance
+    - Maintains more components to preserve trading-relevant patterns
     """
 
-    def __init__(self, n_pca_components: int = 10, variance_threshold: float = 1e-5, cache_path: str = None):
-        self.n_pca_components = n_pca_components
+    def __init__(self, 
+                 target_variance: float = 0.95, 
+                 min_components: int = 20,
+                 max_components: int = 50,
+                 variance_threshold: float = 1e-6, 
+                 cache_path: str = None):
+        self.target_variance = target_variance
+        self.min_components = min_components
+        self.max_components = max_components
         self.variance_threshold = variance_threshold
         self.cache_path = cache_path
 
         self.var_thresh = None
         self.scaler = None
+        self.feature_selector = None
         self.pca = None
+        self.n_components_used = min_components
 
+    def _determine_optimal_components(self, X: np.ndarray) -> int:
+        """Determine optimal number of PCA components based on explained variance"""
+        temp_pca = PCA(svd_solver='full')
+        temp_pca.fit(X)
+        
+        cumsum_variance = np.cumsum(temp_pca.explained_variance_ratio_)
+        
+        optimal_components = np.argmax(cumsum_variance >= self.target_variance) + 1
+        
+        optimal_components = max(self.min_components, 
+                               min(optimal_components, self.max_components))
+        
+        return optimal_components
 
-    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+    def fit_transform(self, X: np.ndarray, y: np.ndarray = None) -> np.ndarray:
         """
-        Fits VarianceThreshold, StandardScaler, and PCA on the given feature matrix,
-        then returns the transformed feature matrix.
-
+        Enhanced fitting with adaptive component selection and feature importance
+        
         X: np.ndarray of shape (n_samples, n_features)
+        y: np.ndarray of shape (n_samples,) - target for feature selection (optional)
         """
         cache_file = self.cache_path or 'feature_cache.pkl'
-        cache_id = f"{X.shape}_{self.n_pca_components}_{self.variance_threshold}"
+        cache_id = f"{X.shape}_{self.target_variance}_{self.min_components}_{self.max_components}"
         cache_file = cache_file.replace('.pkl', f'_{abs(hash(cache_id))}.pkl')
 
-        if os.path.exists(cache_file):
-            with open(cache_file, 'rb') as f:
-                obj = pickle.load(f)
-            features = obj['features']
-            if features.shape[0] == X.shape[0] and features.shape[1] == self.n_pca_components:
-                self.var_thresh = obj['var_thresh']
-                self.scaler = obj['scaler']
-                self.pca = obj['pca']
-                return features
-
-        self.var_thresh = VarianceThreshold(self.variance_threshold)
-        X_var = self.var_thresh.fit_transform(X)
-
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X_var)
-
-        self.pca = PCA(n_components=self.n_pca_components, svd_solver='full')
-        X_pca = self.pca.fit_transform(X_scaled)
-
-        with open(cache_file, 'wb') as f:
-            pickle.dump({
-                'features': X_pca,
-                'var_thresh': self.var_thresh,
-                'scaler': self.scaler,
-                'pca': self.pca
-            }, f)
-
-        return X_pca
-
-    def load_features(self) -> np.ndarray:
-        """
-        Loads features from cache file, if valid. Returns None if not valid.
-        """
-        cache_file = self.cache_path or 'feature_cache.pkl'
-        
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'rb') as f:
                     obj = pickle.load(f)
-                self.var_thresh = obj['var_thresh']
-                self.scaler = obj['scaler']
-                self.pca = obj['pca']
-                print(f"✅ Loaded features from exact cache: {cache_file}")
-                return obj['features']
-            except Exception as e:
-                print(f"⚠️ Error loading from {cache_file}: {e}")
-        
-        base, ext = os.path.splitext(cache_file)
-        cache_dir = os.path.dirname(cache_file) or '.'
-        
-        if os.path.exists(cache_dir):
-            for fname in os.listdir(cache_dir):
-                if fname.startswith(os.path.basename(base)) and fname.endswith(ext):
-                    full_path = os.path.join(cache_dir, fname)
+                features = obj.get('features', None)
+                if isinstance(features, dict):
+                    print(f"❌ Corrupted cache: features is a dict, not numpy array. Ignoring cache and recomputing.")
                     try:
-                        with open(full_path, 'rb') as f:
-                            obj = pickle.load(f)
-                        self.var_thresh = obj['var_thresh']
-                        self.scaler = obj['scaler']
-                        self.pca = obj['pca']
-                        print(f"✅ Loaded features from pattern cache: {full_path}")
-                        return obj['features']
+                        os.remove(cache_file)
+                        print(f"🗑️ Deleted corrupted cache file: {cache_file}")
                     except Exception as e:
-                        print(f"⚠️ Error loading from {full_path}: {e}")
-                        continue
+                        print(f"⚠️ Failed to delete corrupted cache file: {e}")
+                    features = None
+                if (features is not None and hasattr(features, 'shape') and features.shape[0] == X.shape[0] and 
+                    obj.get('target_variance', 0) >= self.target_variance * 0.95):
+                    self.var_thresh = obj['var_thresh']
+                    self.scaler = obj['scaler']
+                    self.feature_selector = obj.get('feature_selector')
+                    self.pca = obj['pca']
+                    self.n_components_used = obj['n_components_used']
+                    print(f"✅ Loaded cached features: {features.shape}")
+                    return features
+            except Exception as e:
+                print(f"⚠️ Cache loading failed: {e}")
+
+        print("🔄 Computing enhanced features...")
         
-        print(f"❌ No valid cache found for {cache_file}")
-        return None
+        self.var_thresh = VarianceThreshold(self.variance_threshold)
+        X_var = self.var_thresh.fit_transform(X)
+        print(f"📊 After variance threshold: {X_var.shape[1]} features")
+        
+        self.scaler = RobustScaler()
+        X_scaled = self.scaler.fit_transform(X_var)
+        
+        if y is not None and len(np.unique(y)) > 1:
+            n_select = min(X_scaled.shape[1], max(100, X_scaled.shape[1] // 2))
+            self.feature_selector = SelectKBest(f_regression, k=n_select)
+            X_selected = self.feature_selector.fit_transform(X_scaled, y)
+            print(f"📊 After feature selection: {X_selected.shape[1]} features")
+        else:
+            X_selected = X_scaled
+            print("📊 No target provided, skipping feature selection")
+
+        self.n_components_used = self._determine_optimal_components(X_selected)
+        self.pca = PCA(n_components=self.n_components_used, svd_solver='full')
+        X_pca = self.pca.fit_transform(X_selected)
+        
+        explained_var = np.sum(self.pca.explained_variance_ratio_)
+        print(f"📊 PCA: {self.n_components_used} components, {explained_var:.3f} variance explained")
+        
+        enhanced_features = self._add_regime_features(X_pca, X)
+        
+        cache_data = {
+            'features': enhanced_features,
+            'var_thresh': self.var_thresh,
+            'scaler': self.scaler,
+            'feature_selector': self.feature_selector,
+            'pca': self.pca,
+            'n_components_used': self.n_components_used,
+            'target_variance': explained_var,
+            'original_shape': X.shape
+        }
+        
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cache_data, f)
+            print(f"💾 Cached features to: {cache_file}")
+        except Exception as e:
+            print(f"⚠️ Caching failed: {e}")
+
+        return enhanced_features
+
+    def _add_regime_features(self, X_pca: np.ndarray, X_original: np.ndarray) -> np.ndarray:
+        """Add market regime and stability indicators"""
+        n_samples = X_pca.shape[0]
+        
+        window = min(20, n_samples // 4)
+        if window > 1:
+            vol_regime = np.zeros(n_samples)
+            for i in range(window, n_samples):
+                vol_regime[i] = np.std(X_pca[i-window:i, 0])
+            vol_regime[:window] = vol_regime[window]
+            vol_regime = (vol_regime - np.mean(vol_regime)) / (np.std(vol_regime) + 1e-8)
+        else:
+            vol_regime = np.zeros(n_samples)
+            
+        trend_persistence = np.zeros(n_samples)
+        if n_samples > 10:
+            for i in range(10, n_samples):
+                recent_pcs = X_pca[max(0, i-10):i, :3]
+                if recent_pcs.shape[0] > 5:
+                    autocorr = np.mean([
+                        np.corrcoef(recent_pcs[:-1, j], recent_pcs[1:, j])[0, 1]
+                        for j in range(min(3, recent_pcs.shape[1]))
+                        if not np.isnan(np.corrcoef(recent_pcs[:-1, j], recent_pcs[1:, j])[0, 1])
+                    ])
+                    trend_persistence[i] = autocorr if not np.isnan(autocorr) else 0
+        
+        stability = np.zeros(n_samples)
+        if n_samples > 5:
+            for i in range(5, n_samples):
+                recent = X_pca[max(0, i-5):i]
+                if recent.shape[0] > 2:
+                    mean_pattern = np.mean(recent, axis=0)
+                    current = X_pca[i]
+                    corr = np.corrcoef(mean_pattern, current)[0, 1]
+                    stability[i] = corr if not np.isnan(corr) else 0
+        
+        regime_features = np.column_stack([
+            vol_regime.reshape(-1, 1),
+            trend_persistence.reshape(-1, 1), 
+            stability.reshape(-1, 1)
+        ])
+        
+        return np.hstack([X_pca, regime_features])
 
     def transform(self, X: np.ndarray) -> np.ndarray:
-        """
-        Transforms new data using the fitted pipeline (VarianceThreshold -> StandardScaler -> PCA).
-        """
+        """Transform new data using the fitted pipeline"""
         if self.var_thresh is None or self.scaler is None or self.pca is None:
             raise RuntimeError("You must call fit_transform before transform.")
 
         X_var = self.var_thresh.transform(X)
         X_scaled = self.scaler.transform(X_var)
-        X_pca = self.pca.transform(X_scaled)
-        return X_pca
+        
+        if self.feature_selector is not None:
+            X_selected = self.feature_selector.transform(X_scaled)
+        else:
+            X_selected = X_scaled
+            
+        X_pca = self.pca.transform(X_selected)
+        
+        enhanced_features = self._add_regime_features(X_pca, X)
+        
+        return enhanced_features
+
+    def get_feature_importance(self) -> dict:
+        """Get feature importance metrics"""
+        if self.pca is None:
+            return {}
+            
+        return {
+            'explained_variance_ratio': self.pca.explained_variance_ratio_,
+            'n_components': self.n_components_used,
+            'total_explained_variance': np.sum(self.pca.explained_variance_ratio_),
+            'feature_selection_used': self.feature_selector is not None
+        }

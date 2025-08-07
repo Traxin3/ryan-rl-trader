@@ -1,22 +1,163 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import gymnasium as gym
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+import math
 
-class TransformerFeatureExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space: gym.spaces.Dict, d_model=128, nhead=4, num_layers=2, dropout=0.1):
-        super().__init__(observation_space, d_model)
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=1000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
+
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1)]
+
+class MultiScaleAttention(nn.Module):
+    """Multi-scale attention for different trading timeframes"""
+    def __init__(self, d_model, nhead, scales=[1, 2, 4]):
+        super().__init__()
+        self.scales = scales
+        self.attentions = nn.ModuleList([
+            nn.MultiheadAttention(d_model, nhead, batch_first=True) 
+            for _ in scales
+        ])
+        self.fusion = nn.Linear(d_model * len(scales), d_model)
+        self.norm = nn.LayerNorm(d_model)
+        
+    def forward(self, x):
+        batch_size, seq_len, d_model = x.shape
+        outputs = []
+        
+        for i, (scale, attn) in enumerate(zip(self.scales, self.attentions)):
+            if scale == 1:
+                attended, _ = attn(x, x, x)
+                outputs.append(attended)
+            else:
+                pooled_len = seq_len // scale
+                if pooled_len > 0:
+                    pooled = F.adaptive_avg_pool1d(
+                        x.transpose(1, 2), pooled_len
+                    ).transpose(1, 2)
+                    attended, _ = attn(pooled, pooled, pooled)
+                    upsampled = F.interpolate(
+                        attended.transpose(1, 2), size=seq_len, mode='linear', align_corners=False
+                    ).transpose(1, 2)
+                    outputs.append(upsampled)
+                else:
+                    outputs.append(x)
+        
+        fused = self.fusion(torch.cat(outputs, dim=-1))
+        return self.norm(fused + x)
+
+class TradingTransformerBlock(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1):
+        super().__init__()
+        self.multi_scale_attn = MultiScaleAttention(d_model, nhead)
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.activation = nn.GELU()
+
+    def forward(self, x):
+        x2 = self.multi_scale_attn(x)
+        x = self.norm1(x + x2)
+        
+        x2, _ = self.self_attn(x, x, x)
+        x = self.norm2(x + self.dropout(x2))
+        
+        x2 = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        x = self.norm3(x + self.dropout(x2))
+        
+        return x
+
+class TransformerFeatureExtractor(nn.Module):
+    def __init__(self, observation_space: gym.spaces.Dict, config=None):
+        super().__init__()
+        if config is None:
+            config = {}
+        d_model = config.get('d_model', 256)
+        nhead = config.get('nhead', 8)
+        num_layers = config.get('num_layers', 4)
+        dropout = config.get('dropout', 0.1)
+        
         window_size, feature_dim = observation_space['features'].shape
         self.d_model = d_model
-        self.input_proj = nn.Linear(feature_dim, d_model)
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dropout=dropout, batch_first=True, norm_first=True
+        self.window_size = window_size
+        
+        self.input_proj = nn.Sequential(
+            nn.Linear(feature_dim, d_model // 2),
+            nn.ReLU(),
+            nn.Linear(d_model // 2, d_model),
+            nn.LayerNorm(d_model)
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.pool = nn.AdaptiveAvgPool1d(1)
+        
+        self.pos_encoding = PositionalEncoding(d_model, window_size)
+        
+        self.transformer_blocks = nn.ModuleList([
+            TradingTransformerBlock(d_model, nhead, d_model * 4, dropout)
+            for _ in range(num_layers)
+        ])
+        
+        self.market_context = nn.Sequential(
+            nn.Linear(3, 32),  # balance, equity, margin
+            nn.ReLU(),
+            nn.Linear(32, 64),
+            nn.LayerNorm(64)
+        )
+        
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.max_pool = nn.AdaptiveMaxPool1d(1)
+        self.attention_pool = nn.Sequential(
+            nn.Linear(d_model, 1),
+            nn.Softmax(dim=1)
+        )
+        
+        self.output_proj = nn.Sequential(
+            nn.Linear(d_model * 3, d_model),  # 3 pooling strategies
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model)
+        )
 
     def forward(self, obs):
-        x = obs['features']
+        x = obs['features']  # [batch, seq_len, features]
+        batch_size = x.shape[0]
+        
         x = self.input_proj(x)
-        x = self.transformer(x)
-        x = x.transpose(1, 2)
-        return self.pool(x).squeeze(-1)
+        
+        x = self.pos_encoding(x)
+        
+        for block in self.transformer_blocks:
+            x = block(x)
+        
+        x_t = x.transpose(1, 2)  # [batch, d_model, seq_len]
+        
+        avg_pooled = self.global_pool(x_t).squeeze(-1)
+        
+        max_pooled = self.max_pool(x_t).squeeze(-1)
+        
+        attention_weights = self.attention_pool(x)  # [batch, seq_len, 1]
+        attention_pooled = torch.sum(x * attention_weights, dim=1)  # [batch, d_model]
+        
+        pooled = torch.cat([avg_pooled, max_pooled, attention_pooled], dim=1)
+        sequence_features = self.output_proj(pooled)
+        
+        market_state = torch.stack([
+            obs['balance'].squeeze(-1),
+            obs['equity'].squeeze(-1), 
+            obs['margin'].squeeze(-1)
+        ], dim=1)
+        market_features = self.market_context(market_state)
+        
+        final_features = torch.cat([sequence_features, market_features], dim=1)
+        
+        return final_features

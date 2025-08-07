@@ -7,11 +7,17 @@ import sys
 import json
 import time
 import threading
+import config
 from datetime import datetime
 from pathlib import Path
-from model.ppo_model import create_ppo_model
+from ray import tune
+from model.algorithms import get_algorithm_class
+from ray.rllib.env.env_context import EnvContext
+from ray.rllib.env import PettingZooEnv
+from ray.tune.registry import register_env
+from ray.rllib.models import ModelCatalog
+from model.ppo_model import TransformerRLlibModel
 from gym_mtsim.envs.mt_env import MtEnv
-from stable_baselines3.common.env_util import make_vec_env
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -365,35 +371,48 @@ def start_gui_mode():
         os.chdir(original_dir)
         print("💡 Try running manually: cd ryan-dash && npm run dev")
 
+def env_creator(env_config: dict):
+    config = env_config.get("config", {})
+    return MtEnv(**config)
+
 def run_training(config):
-    """Run the training process with enhanced logging"""
     print("\n" + "="*50)
-    print("🏋️ Starting Training Process")
+    print("🏋️ Starting Training Process (Ray RLlib)")
     print("="*50)
-    
     try:
-        venv = make_vec_env(lambda: create_env(config, use_cached_features=True), n_envs=1)
-        model = create_ppo_model(venv, config)
-        
-        print("\n🔧 Model Architecture:")
-        print(model.policy)
-        
-        print("\n🏃 Starting training...")
-        start_time = time.time()
-        model.learn(total_timesteps=1000, progress_bar=True)
-        
-        model_path = "ppo_transformer_mtsim_final"
-        model.save(model_path)
-        
-        duration = time.time() - start_time
-        print("\n" + "="*50)
-        print(f"✅ Training Completed in {duration/60:.2f} minutes")
-        print(f"💾 Model saved to: {model_path}")
-        print("="*50)
-        
+        register_env("TradingEnv", lambda cfg: MtEnv(**cfg))
+        ModelCatalog.register_custom_model("transformer_trading_model", TransformerRLlibModel)
+
+        algo_name = config.get("algorithm", "impala")
+        get_algo_config = get_algorithm_class(algo_name)
+
+        model_config = {
+            "custom_model": "transformer_trading_model",
+            "custom_model_config": {
+                "features_dim": config.get("model", {}).get("features_dim", 256),
+                "transformer": config.get("model", {}).get("transformer", {})
+            },
+        }
+
+        algo_config = get_algo_config(
+            env_config=config["env"],
+            model_config=model_config,
+            ppo_config=config["ppo"]
+        )
+
+        print("\n🏃 Starting Ray Tune training...")
+        analysis = tune.run(
+            algo_name.upper(),
+            config=algo_config.to_dict(),
+            stop={"training_iteration": 10},
+            local_dir="./ray_results",
+            checkpoint_at_end=True,
+        )
+        print("\n✅ Training completed. Results in ./ray_results")
     except Exception as e:
         print("\n❌ Training Failed:")
         print(f"Error: {str(e)}")
+        print("\n💡 If you use custom environment loops, always unpack as (obs, info) = env.reset() and (obs, reward, terminated, truncated, info) = env.step(action)")
         raise
 
 if __name__ == "__main__":

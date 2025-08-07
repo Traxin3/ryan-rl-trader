@@ -25,6 +25,7 @@ from scipy.stats import linregress
 from ..metatrader import Timeframe, SymbolInfo, retrieve_data
 from .order import OrderType, Order
 from .exceptions import SymbolNotFound, OrderNotFound
+from .market_impact import MarketImpactModel
 
 
 class MtSimulator:
@@ -400,6 +401,7 @@ class MtSimulator:
         timeframes: Optional[List[int]] = None,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
+        enable_realistic_execution: bool = True,
     ) -> None:
         self.unit = unit
         self.balance = balance
@@ -417,6 +419,10 @@ class MtSimulator:
         self.timeframes = timeframes or []
         self.start = start
         self.end = end
+        
+        self.enable_realistic_execution = enable_realistic_execution
+        self.market_impact_model = MarketImpactModel() if enable_realistic_execution else None
+        self.execution_history = []  # Track execution costs
         
         data_dir = os.path.join(os.path.dirname(__file__), '..', 'data_cache')
         os.makedirs(data_dir, exist_ok=True)
@@ -564,7 +570,40 @@ class MtSimulator:
     ) -> Optional[Order]:
         order_id = len(self.closed_orders) + len(self.orders) + 1
         entry_time = self.current_time
-        entry_price = self.price_at(symbol, entry_time)['Close']
+        
+        if self.enable_realistic_execution and self.market_impact_model:
+            df = self.symbols_data[(symbol, self.timeframes[0])]
+            nearest = self.nearest_time(symbol, entry_time)
+            current_idx = df.index.get_loc(nearest)
+            
+            lookback = min(48, current_idx)
+            recent_prices = df.iloc[max(0, current_idx-lookback):current_idx+1]['Close'].values
+            current_price = df.iloc[current_idx]['Close']
+            
+            execution_price, execution_info = self.market_impact_model.get_execution_price(
+                order_type=order_type,
+                volume=volume,
+                symbol=symbol,
+                current_time=entry_time,
+                price_data=recent_prices,
+                current_price=current_price,
+                market_order=True
+            )
+            
+            self.execution_history.append({
+                'time': entry_time,
+                'symbol': symbol,
+                'order_type': order_type.name,
+                'volume': volume,
+                'market_price': current_price,
+                'execution_price': execution_price,
+                **execution_info
+            })
+            
+            entry_price = execution_price
+        else:
+            entry_price = self.price_at(symbol, entry_time)['Close']
+        
         exit_time = entry_time
         exit_price = entry_price
 

@@ -14,100 +14,7 @@ from gymnasium import spaces
 from ..simulator import MtSimulator, OrderType
 from collections import deque, defaultdict
 import time
-from stable_baselines3.common.logger import configure
-from stable_baselines3.common.callbacks import BaseCallback
 
-class TensorboardMetricsCallback(BaseCallback):
-    def __init__(self, verbose=1):
-        super().__init__(verbose)
-        self.trade_wins = 0
-        self.trade_losses = 0
-        self.trade_profits = []
-        self.equity_peak = -np.inf
-        self.equity_drawdown = 0
-        self.position_holding_times = []
-        self.current_positions = {}
-        self.episode_start_time = time.time()
-        self.portfolio_returns = []
-        self.episode_reward_components = defaultdict(list)
-        self.timeframe_factors = []
-
-    def _on_step(self) -> bool:
-        return True
-
-    def _on_rollout_end(self) -> None:
-        if len(self.trade_profits) > 0:
-            total_trades = self.trade_wins + self.trade_losses
-            win_rate = self.trade_wins / (total_trades + 1e-6)
-            avg_profit = np.mean(self.trade_profits)
-            avg_holding_time = np.mean(self.position_holding_times) if self.position_holding_times else 0
-            
-            returns = np.array(self.trade_profits)
-            sharpe = np.mean(returns) / (np.std(returns) + 1e-6) * np.sqrt(252) if len(returns) > 1 else 0
-            sortino = self._calculate_sortino_ratio(returns)
-            
-            self.logger.record("metrics/win_rate", win_rate)
-            self.logger.record("metrics/avg_profit_per_trade", avg_profit)
-            self.logger.record("metrics/max_drawdown", self.equity_drawdown)
-            self.logger.record("metrics/sharpe_ratio", sharpe)
-            self.logger.record("metrics/sortino_ratio", sortino)
-            self.logger.record("metrics/avg_holding_time", avg_holding_time)
-            self.logger.record("metrics/active_positions", len(self.current_positions))
-            self.logger.record("metrics/total_trades", total_trades)
-            self.logger.record("metrics/profit_factor", self._calculate_profit_factor())
-            
-            self.logger.record("reward_components/equity_change", np.mean(self.episode_reward_components['equity_change']))
-            self.logger.record("reward_components/trade_quality", np.mean(self.episode_reward_components['trade_quality']))
-            self.logger.record("reward_components/risk_penalty", np.mean(self.episode_reward_components['risk_penalty']))
-            self.logger.record("reward_components/consistency_bonus", np.mean(self.episode_reward_components['consistency_bonus']))
-            self.logger.record("reward_components/timeframe_factor", np.mean(self.timeframe_factors))
-            
-        self.trade_profits = []
-        self.position_holding_times = []
-        self.episode_start_time = time.time()
-        self.episode_reward_components = defaultdict(list)
-        self.timeframe_factors = []
-
-    def _calculate_sortino_ratio(self, returns: np.ndarray, annualize_factor=252) -> float:
-        if len(returns) < 2:
-            return 0.0
-        downside_returns = returns[returns < 0]
-        if len(downside_returns) == 0:
-            return np.mean(returns) * annualize_factor / (np.std(returns) + 1e-6)
-        downside_std = np.std(downside_returns)
-        return np.mean(returns) * np.sqrt(annualize_factor) / (downside_std + 1e-6)
-
-    def _calculate_profit_factor(self) -> float:
-        if not self.trade_profits:
-            return 0.0
-        gross_profit = sum(p for p in self.trade_profits if p > 0)
-        gross_loss = abs(sum(p for p in self.trade_profits if p < 0))
-        return gross_profit / (gross_loss + 1e-6)
-
-    def update_trade_metrics(self, order_info: Dict) -> None:
-        profit = order_info.get('profit', 0)
-        if profit > 0:
-            self.trade_wins += 1
-        else:
-            self.trade_losses += 1
-        self.trade_profits.append(profit)
-        self.portfolio_returns.append(profit)
-
-    def update_drawdown(self, equity: float) -> None:
-        self.equity_peak = max(self.equity_peak, equity)
-        self.equity_drawdown = max(self.equity_drawdown, (self.equity_peak - equity) / (self.equity_peak + 1e-6))
-
-    def update_position_times(self, current_orders: List) -> None:
-        now = time.time()
-        active_ids = {order.id for order in current_orders}
-        
-        for order_id in list(self.current_positions.keys()):
-            if order_id not in active_ids:
-                self.position_holding_times.append(now - self.current_positions.pop(order_id))
-        
-        for order in current_orders:
-            if order.id not in self.current_positions:
-                self.current_positions[order.id] = now
 
 class MtEnv(gym.Env):
     metadata = {'render_modes': ['human', 'simple_figure', 'advanced_figure']}
@@ -174,16 +81,21 @@ class MtEnv(gym.Env):
             timeframes=timeframes,
             start=time_start,
             end=time_end,
+            enable_realistic_execution=True  # Enable realistic market simulation
         )
         
         self.time_points = self.simulator.symbols_data[(symbols[0], timeframes[0])].index.to_pydatetime().tolist()
         self.simulator.current_time = self.time_points[0]
         self.prices = self._get_prices()
+        
         self.optimized_feature_engine = OptimizedFeatureEngine(
-            n_pca_components=10,
-            variance_threshold=1e-5,
+            target_variance=0.95,      # Higher variance retention
+            min_components=20,         # More components for patterns
+            max_components=50,         # Allow more if needed
+            variance_threshold=1e-6,   # Stricter variance threshold
             cache_path=f"feature_cache_{'_'.join(self.symbols)}_{'_'.join(map(str, self.timeframes))}.pkl"
         )
+        
         self.signal_features = self._process_data()
         self.features_shape = (window_size, self.signal_features.shape[1])
         
@@ -222,14 +134,14 @@ class MtEnv(gym.Env):
         if len(self.time_points) <= window_size:
             raise ValueError(f"Not enough data. Need {window_size+1} bars, got {len(self.time_points)}")
 
-    def reset(self, seed=None, options=None) -> Dict[str, np.ndarray]:
+    def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
         self._truncated = False
         self._current_tick = self._start_tick
         self.simulator = copy.deepcopy(self.simulator)
         self.simulator.current_time = self.time_points[self._current_tick]
         self.history = [self._create_info()]
-        
+
         self.trade_history = []
         self.peak_equity = self.simulator.balance
         self.max_drawdown = 0.0
@@ -238,39 +150,36 @@ class MtEnv(gym.Env):
         self.returns_volatility = 0.0
         self.episode_reward_components = defaultdict(list)
         self.timeframe_factors = []
-        
-        return self._get_observation(), self._create_info()
 
-    def step(self, action: np.ndarray) -> Tuple[Dict[str, np.ndarray], float, bool, Dict[str, Any]]:
+        obs = self._get_observation()
+        info = self._create_info()
+        if not (isinstance(obs, dict) and all(isinstance(v, np.ndarray) for v in obs.values())):
+            print("[ERROR] MtEnv.reset: Observation is not a dict of np.ndarray!", type(obs), {k: type(v) for k, v in obs.items()})
+        return obs, info
+
+    def step(self, action: np.ndarray):
         orders_info, closed_orders_info = self._apply_action(action)
         self._current_tick += 1
-        if self._current_tick == self._end_tick:
-            self._truncated = True
-        
+        terminated = self._current_tick == self._end_tick
+        truncated = False  # You can set this to True if you have a time limit or other truncation condition
         dt = self.time_points[self._current_tick] - self.time_points[self._current_tick - 1]
         self.simulator.tick(dt)
-        
         self.portfolio_values.append(self.simulator.equity)
         if len(self.portfolio_values) > 2:
             returns = np.diff(np.log(self.portfolio_values))
             self.returns_volatility = np.std(returns) if len(returns) > 1 else 0.0
-        
         step_reward = self._calculate_reward(orders_info, closed_orders_info)
-        
         for symbol, closed_orders in closed_orders_info.items():
             for order in closed_orders:
                 self.trade_history.append(order)
                 self.metrics_callback.update_trade_metrics(order)
-        
         self._update_position_times()
         self.metrics_callback.update_position_times(self.simulator.orders)
-        
         self._update_drawdown_metrics()
         self.metrics_callback.update_drawdown(self.simulator.equity)
-        
         info = self._create_info(
-            orders=orders_info, 
-            closed_orders=closed_orders_info, 
+            orders=orders_info,
+            closed_orders=closed_orders_info,
             step_reward=step_reward,
             leverage=self.simulator.margin / (self.simulator.balance + 1e-6),
             drawdown=self.max_drawdown,
@@ -280,11 +189,11 @@ class MtEnv(gym.Env):
             profit_factor=self._calculate_profit_factor(),
             volatility=self.returns_volatility
         )
-        
         observation = self._get_observation()
         self.history.append(info)
-        
-        return observation, step_reward, False, self._truncated, info
+        if not (isinstance(observation, dict) and all(isinstance(v, np.ndarray) for v in observation.values())):
+            print("[ERROR] MtEnv.step: Observation is not a dict of np.ndarray!", type(observation), {k: type(v) for k, v in observation.items()})
+        return observation, step_reward, terminated, truncated, info
 
     def _calculate_reward(self, orders_info: Dict, closed_orders_info: Dict) -> float:
         """Enhanced reward calculation with volatility normalization and progressive penalties"""
@@ -531,48 +440,63 @@ class MtEnv(gym.Env):
 
     def _process_data(self) -> np.ndarray:
         """
-        Optimized feature extraction: ~100 core features, then PCA to 10 components.
-        Loads from cache if available and valid, otherwise computes and caches.
+        Enhanced feature extraction with improved liquidity dynamics and regime detection.
+        Includes target-aware feature selection for better explained variance.
         """
         import os
         from tqdm import tqdm
-        
-        if self.use_cached_features:
-            cached_features = self.optimized_feature_engine.load_features()
-            if cached_features is not None:
-                print(f"✅ Loaded cached features with shape {cached_features.shape}")
-                return cached_features
-            else:
-                print("⚠️ No cached features found, will compute from scratch")
-        
-        cache_path = self.optimized_feature_engine.cache_path
-        if os.path.exists(cache_path) and not self.use_cached_features:
-            print(f"📋 Cache exists at {cache_path} but computing fresh features as requested")
-        
-        print("🔧 Computing features from scratch...")
-
         data = self.prices
         dt_index = self.simulator.symbols_data[(self.symbols[0], self.timeframes[0])].reindex(self.time_points, method='ffill').index
 
-        ohlc_features = np.column_stack([
-            data[(symbol, tf)] for symbol in self.symbols for tf in self.timeframes
-        ])
-        range_features = np.column_stack([
-            (data[(symbol, tf)][:, 1] - data[(symbol, tf)][:, 2]).reshape(-1, 1)
-            for symbol in self.symbols for tf in self.timeframes
-        ])
-        price_action_feats = np.concatenate([ohlc_features, range_features], axis=1)
+        ohlc_features = []
+        for symbol in self.symbols:
+            for tf in self.timeframes:
+                ohlc = data[(symbol, tf)]
+                basic_ohlc = ohlc.copy()
+                close_prices = ohlc[:, 0]
+                high_low_ratio = (ohlc[:, 1] - ohlc[:, 2]) / (close_prices + 1e-8)
+                open_close_ratio = (ohlc[:, 0] - ohlc[:, 3]) / (close_prices + 1e-8)
+                returns = np.diff(np.log(close_prices + 1e-8))
+                volatility = np.zeros_like(close_prices)
+                volatility[1:] = np.abs(returns)
+                rolling_vol = np.zeros_like(close_prices)
+                for i in range(20, len(close_prices)):
+                    rolling_vol[i] = np.std(returns[max(0, i-20):i])
+                combined = np.column_stack([
+                    basic_ohlc,
+                    high_low_ratio.reshape(-1, 1),
+                    open_close_ratio.reshape(-1, 1),
+                    volatility.reshape(-1, 1),
+                    rolling_vol.reshape(-1, 1)
+                ])
+                ohlc_features.append(combined)
+        ohlc_features = np.concatenate(ohlc_features, axis=1)
 
         sim = self.simulator
-        liquidity_feats = []
-        for idx, dt in enumerate(tqdm(dt_index, desc='Liquidity Features')):
+        enhanced_liquidity_feats = []
+        for idx, dt in enumerate(tqdm(dt_index, desc='Enhanced Liquidity Features')):
             row = []
             for symbol in self.symbols:
                 for tf in self.timeframes:
                     dist_liq, liq_sweep, liq_buildup, ob_strength = sim.get_liquidity_features(symbol, tf, dt)
-                    row.extend([dist_liq, liq_sweep, liq_buildup, ob_strength])
-            liquidity_feats.append(row)
-        liquidity_feats = np.array(liquidity_feats)
+                    sessions, mins_since_open, magic1, magic2 = sim.get_session_info(dt)
+                    hourly_liquidity = sim.market_impact_model.get_daily_liquidity_pattern(dt.hour) if hasattr(sim, 'market_impact_model') and sim.market_impact_model else 1.0
+                    df = sim.symbols_data[(symbol, tf)]
+                    nearest = sim.nearest_time(symbol, dt, tf)
+                    current_idx = df.index.get_loc(nearest)
+                    if current_idx >= 10:
+                        recent_data = df.iloc[max(0, current_idx-10):current_idx+1]
+                        market_depth = 1.0 / (np.std(recent_data['Close'].values) + 1e-8)
+                    else:
+                        market_depth = 1.0
+                    row.extend([
+                        dist_liq, liq_sweep, liq_buildup, ob_strength,
+                        *sessions, mins_since_open / 1440.0,
+                        magic1 / 144.0, magic2 / 89.0,
+                        hourly_liquidity, market_depth
+                    ])
+            enhanced_liquidity_feats.append(row)
+        enhanced_liquidity_feats = np.array(enhanced_liquidity_feats)
 
         hour = np.array([d.hour for d in dt_index])
         minute = np.array([d.minute for d in dt_index])
@@ -584,12 +508,17 @@ class MtEnv(gym.Env):
         weekday_sin = np.sin(2 * np.pi * weekday / 7).reshape(-1, 1)
         weekday_cos = np.cos(2 * np.pi * weekday / 7).reshape(-1, 1)
         time_arr = np.linspace(0, 1, len(self.time_points)).reshape(-1, 1)
+        is_london = ((hour >= 8) & (hour < 17)).astype(float).reshape(-1, 1)
+        is_ny = ((hour >= 13) & (hour < 22)).astype(float).reshape(-1, 1)
+        is_overlap = ((hour >= 13) & (hour < 17)).astype(float).reshape(-1, 1)
+        is_weekend = (weekday >= 5).astype(float).reshape(-1, 1)
         temporal_feats = np.concatenate([
-            time_arr, hour_sin, hour_cos, minute_sin, minute_cos, weekday_sin, weekday_cos
+            time_arr, hour_sin, hour_cos, minute_sin, minute_cos,
+            weekday_sin, weekday_cos, is_london, is_ny, is_overlap, is_weekend
         ], axis=1)
 
         structure_feats = []
-        for idx, dt in enumerate(tqdm(dt_index, desc='Market Structure')):
+        for idx, dt in enumerate(tqdm(dt_index, desc='Enhanced Market Structure')):
             row = []
             for symbol in self.symbols:
                 for tf in self.timeframes:
@@ -597,29 +526,80 @@ class MtEnv(gym.Env):
                     trend = sim.get_trend_state(symbol, tf)
                     weak_high, strong_high, weak_low, strong_low = sim.get_weak_strong_high_low(symbol, tf)
                     eqh, eql = sim.get_equal_high_low_count(symbol, tf)
+                    cycle_state = sim.get_cycle_state(symbol, tf, dt)
+                    df = sim.symbols_data[(symbol, tf)]
+                    nearest = sim.nearest_time(symbol, dt, tf)
+                    current_idx = df.index.get_loc(nearest)
+                    if current_idx >= 20:
+                        recent_closes = df.iloc[max(0, current_idx-20):current_idx+1]['Close'].values
+                        trend_strength = abs(np.corrcoef(np.arange(len(recent_closes)), recent_closes)[0, 1])
+                        if np.isnan(trend_strength):
+                            trend_strength = 0.0
+                    else:
+                        trend_strength = 0.0
                     row.extend([
-                        *bos_choch.flatten(), trend,
+                        *bos_choch.flatten(), trend, trend_strength,
                         int(weak_high), int(strong_high), int(weak_low), int(strong_low),
-                        eqh, eql
+                        eqh, eql, cycle_state
                     ])
             structure_feats.append(row)
         structure_feats = np.array(structure_feats)
 
         risk_feats = []
-        for idx, dt in enumerate(tqdm(dt_index, desc='Risk Features')):
+        for idx, dt in enumerate(tqdm(dt_index, desc='Enhanced Risk Features')):
             row = []
             for symbol in self.symbols:
                 for tf in self.timeframes:
                     rr_pot, stop_hunt, atr15, london_bias, ny_bias = sim.get_trade_risk_features(symbol, tf, dt)
-                    row.extend([rr_pot, stop_hunt, atr15, london_bias, ny_bias])
+                    df = sim.symbols_data[(symbol, tf)]
+                    nearest = sim.nearest_time(symbol, dt, tf)
+                    current_idx = df.index.get_loc(nearest)
+                    current_price = df.iloc[current_idx]['Close']
+                    if current_idx >= 24:
+                        recent_prices = df.iloc[max(0, current_idx-24):current_idx+1]['Close'].values
+                        vol_regime = np.std(np.diff(np.log(recent_prices)))
+                    else:
+                        vol_regime = 0.01
+                    session_multiplier = 1.0
+                    if dt.hour >= 8 and dt.hour < 17:
+                        session_multiplier = 0.7
+                    elif dt.hour >= 13 and dt.hour < 17:
+                        session_multiplier = 0.5
+                    elif dt.hour >= 17 and dt.hour < 22:
+                        session_multiplier = 0.8
+                    else:
+                        session_multiplier = 1.5
+                    estimated_spread = vol_regime * session_multiplier * 10000
+                    row.extend([
+                        rr_pot, stop_hunt, atr15, london_bias, ny_bias,
+                        vol_regime, estimated_spread
+                    ])
             risk_feats.append(row)
         risk_feats = np.array(risk_feats)
 
         core_features = np.concatenate([
-            price_action_feats, liquidity_feats, temporal_feats, structure_feats, risk_feats
+            ohlc_features, enhanced_liquidity_feats, temporal_feats,
+            structure_feats, risk_feats
         ], axis=1)
+        print(f"📊 Core features shape: {core_features.shape}")
 
-        features_reduced = self.optimized_feature_engine.fit_transform(core_features)
+        target = None
+        if len(core_features) > 1:
+            close_prices = data[(self.symbols[0], self.timeframes[0])][:, 0]
+            future_returns = np.zeros(len(close_prices))
+            for i in range(len(close_prices) - 5):
+                future_returns[i] = (close_prices[i + 5] - close_prices[i]) / close_prices[i]
+            target = np.digitize(future_returns, bins=np.percentile(future_returns, [25, 75]))
+
+        features_reduced = self.optimized_feature_engine.fit_transform(core_features, target)
+        if self.use_cached_features and features_reduced is not None and not isinstance(features_reduced, dict):
+            print(f"✅ Loaded cached features with shape {features_reduced.shape}")
+        importance_info = self.optimized_feature_engine.get_feature_importance()
+        print(f"📈 Feature Engineering Summary:")
+        print(f"   - Input features: {core_features.shape[1]}")
+        print(f"   - Output features: {features_reduced.shape[1]}")
+        print(f"   - Explained variance: {importance_info.get('total_explained_variance', 'N/A'):.3f}")
+        print(f"   - PCA components: {importance_info.get('n_components', 'N/A')}")
 
         return features_reduced
 
