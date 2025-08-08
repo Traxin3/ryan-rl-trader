@@ -106,7 +106,7 @@ class TransformerRLModule(TorchRLModule):
                 attn_out, _ = self.cross_attn(q, k, v)
                 cross = attn_out.squeeze(1)
                 fused = self.fusion(torch.cat([feats, cross], dim=-1))
-        # Fuse orders context if available
+        
         if self.has_orders and isinstance(batch['obs'], dict) and ('orders' in batch['obs']):
             orders_vec = batch['obs']['orders']
             orders_ctx = self.orders_context(orders_vec)
@@ -141,6 +141,18 @@ class TransformerRLModule(TorchRLModule):
             logits = torch.cat([mean, log_std], dim=-1)
         value = self.value_head(features)
         return {"action_dist_inputs": logits, "values": value.squeeze(-1)}
+
+   
+    def get_inference_action_dist_cls(self):
+        try:
+            from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian, TorchCategorical
+        except Exception:
+            # Fallback import path for some RLlib versions
+            from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian, TorchCategorical
+        return TorchCategorical if self.is_discrete else TorchDiagGaussian
+
+    def get_exploration_action_dist_cls(self):
+        return self.get_inference_action_dist_cls()
 
     @override(TorchRLModule)
     def forward_inference(self, batch):
