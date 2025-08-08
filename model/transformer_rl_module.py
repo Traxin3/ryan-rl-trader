@@ -145,11 +145,17 @@ class TransformerRLModule(TorchRLModule):
    
     def get_inference_action_dist_cls(self):
         try:
-            from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian, TorchCategorical
+            # Prefer squashed Gaussian for Box(-1,1) actions; supports from_logits in most RLlib versions
+            from ray.rllib.models.torch.torch_action_dist import TorchSquashedGaussian, TorchCategorical
+            return TorchCategorical if self.is_discrete else TorchSquashedGaussian
         except Exception:
-            # Fallback import path for some RLlib versions
-            from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian, TorchCategorical
-        return TorchCategorical if self.is_discrete else TorchDiagGaussian
+            try:
+                from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian, TorchCategorical
+                return TorchCategorical if self.is_discrete else TorchDiagGaussian
+            except Exception:
+                # Last resort: fall back to categorical (will raise if action space is Box)
+                from ray.rllib.models.torch.torch_action_dist import TorchCategorical
+                return TorchCategorical
 
     def get_exploration_action_dist_cls(self):
         return self.get_inference_action_dist_cls()

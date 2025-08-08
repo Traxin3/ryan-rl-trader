@@ -12,14 +12,30 @@ from datetime import datetime
 from pathlib import Path
 from ray import tune
 from model.algorithms import get_algorithm_class
-from ray.rllib.env.env_context import EnvContext
-from ray.rllib.env import PettingZooEnv
 from ray.tune.registry import register_env
-from ray.rllib.models import ModelCatalog
 from gym_mtsim.envs.mt_env import MtEnv
 import warnings
 
 warnings.filterwarnings('ignore')
+
+# Global seeding for reproducibility
+
+def set_global_seeds(seed: int = 42):
+    try:
+        import random
+        import numpy as np
+        random.seed(seed)
+        np.random.seed(seed)
+        try:
+            import torch
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        except Exception:
+            pass
+        os.environ['PYTHONHASHSEED'] = str(seed)
+    except Exception:
+        pass
 
 def colorize_performance(value, threshold_good=0.05, threshold_bad=-0.05):
     """Add color to performance metrics based on value"""
@@ -384,6 +400,21 @@ def run_training(config):
             valid_args = inspect.signature(MtEnv.__init__).parameters
             return {k: v for k, v in cfg.items() if k in valid_args}
 
+        # Global seeds
+        seed = int(config.get('seed', 42))
+        set_global_seeds(seed)
+
+        # Auto-detect GPUs if not specified
+        try:
+            import torch
+            detected_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        except Exception:
+            detected_gpus = 0
+        algo_key = config.get('algorithm', 'impala').lower()
+        config.setdefault(algo_key, {})
+        if 'num_gpus' not in config[algo_key]:
+            config[algo_key]['num_gpus'] = detected_gpus
+
         env_config = config["env"]
         symbols = env_config.get('symbols', ['EURUSD'])
         timeframes = env_config.get('timeframes', [15])
@@ -413,7 +444,6 @@ def run_training(config):
         algo_name = config.get("algorithm", "impala")
         get_algo_config = get_algorithm_class(algo_name)
 
-
         model_config = {
             "custom_model": "transformer_trading_model",
             "custom_model_config": {
@@ -435,13 +465,17 @@ def run_training(config):
             storage_uri = f"file:///{abs_ray_results_fixed}"
         else:
             storage_uri = f"file://{abs_ray_results}"
-        analysis = tune.run(
-            algo_name.upper(),
-            config=algo_config.to_dict(),
-            stop={"training_iteration": 10},
-            storage_path=storage_uri,
-            checkpoint_at_end=True,
-        )
+        try:
+            analysis = tune.run(
+                algo_name.upper(),
+                config=algo_config.to_dict(),
+                stop={"training_iteration": 10},
+                storage_path=storage_uri,
+                checkpoint_at_end=True,
+            )
+        except KeyboardInterrupt:
+            print("\n🛑 Training interrupted by user. Attempting graceful shutdown...")
+            return
         print("\n✅ Training completed. Results in ./ray_results")
     except Exception as e:
         print("\n❌ Training Failed:")
