@@ -99,7 +99,7 @@ class MtEnv(gym.Env):
             variance_threshold=1e-6,
             cache_path=f"feature_cache_{'_'.join(self.symbols)}_{'_'.join(map(str, self.timeframes))}.pkl",
             reuse_existing=True,
-            keep_last=2,
+            keep_last=1,  # keep only a single deterministic cache to avoid drift across workers
         )
 
         if self.use_cached_features:
@@ -841,7 +841,8 @@ class MtEnv(gym.Env):
             close_orders_logit = symbol_action[:self.symbol_max_orders] * 5
             order_kind_logit = symbol_action[self.symbol_max_orders] * 5  # market vs limit
             tif_logit = symbol_action[self.symbol_max_orders + 1] * 5      # IOC vs FOK
-            limit_offset_norm = symbol_action[self.symbol_max_orders + 2]  # [-1,1] -> [0, max_bps]
+            # Signed limit offset in [-1, 1] scaled to bps; simulator handles tick quantization
+            limit_offset_norm = symbol_action[self.symbol_max_orders + 2]
             hold_logit = symbol_action[self.symbol_max_orders + 3] * 5
             volume_signal = symbol_action[self.symbol_max_orders + 4]
 
@@ -901,7 +902,8 @@ class MtEnv(gym.Env):
                 market_order = True if order_kind_prob >= 0.5 else False
                 tif = 'IOC' if tif_prob >= 0.5 else 'FOK'
                 max_offset_bps = 5.0
-                limit_offset_bps = float(max_offset_bps * max(0.0, abs(limit_offset_norm)))
+                # Allow negative (passive) or positive (aggressive) signed offsets
+                limit_offset_bps = float(max_offset_bps * float(limit_offset_norm))
                 try:
                     order = self.simulator.create_order(
                         order_type, symbol, modified_volume, fee,

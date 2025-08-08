@@ -33,6 +33,24 @@ class TransformerRLModule(TorchRLModule):
                 nn.Dropout(0.1),
             )
 
+        # Orders context branch
+        self.has_orders = hasattr(obs_space, 'spaces') and ('orders' in obs_space.spaces)
+        self.orders_ctx_dim = 64
+        if self.has_orders:
+            orders_dim = int(obs_space.spaces['orders'].shape[0])
+            self.orders_context = nn.Sequential(
+                nn.Linear(orders_dim, 128),
+                nn.ReLU(),
+                nn.Dropout(0.05),
+                nn.Linear(128, self.orders_ctx_dim),
+                nn.LayerNorm(self.orders_ctx_dim),
+            )
+            self.orders_fusion = nn.Sequential(
+                nn.Linear(features_dim + self.orders_ctx_dim, features_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+            )
+
         self.use_time_tokens = transformer_cfg.get('use_time_tokens', True)
         if self.use_time_tokens:
             self.time_tokens = nn.Parameter(torch.zeros(2, features_dim))
@@ -78,6 +96,7 @@ class TransformerRLModule(TorchRLModule):
 
     def _encode(self, batch):
         feats = self.feature_extractor(batch['obs'])
+        fused = feats
         if self.has_liquidity:
             liq = batch['obs'].get('liquidity') if isinstance(batch['obs'], dict) else None
             if liq is not None:
@@ -87,10 +106,11 @@ class TransformerRLModule(TorchRLModule):
                 attn_out, _ = self.cross_attn(q, k, v)
                 cross = attn_out.squeeze(1)
                 fused = self.fusion(torch.cat([feats, cross], dim=-1))
-            else:
-                fused = feats
-        else:
-            fused = feats
+        # Fuse orders context if available
+        if self.has_orders and isinstance(batch['obs'], dict) and ('orders' in batch['obs']):
+            orders_vec = batch['obs']['orders']
+            orders_ctx = self.orders_context(orders_vec)
+            fused = self.orders_fusion(torch.cat([fused, orders_ctx], dim=-1))
         return self._append_time_tokens(fused)
 
     @override(TorchRLModule)
