@@ -9,7 +9,14 @@ def get_impala_config(env_config, model_config, training_config):
       - training_config: dict of hyperparams (lr, batch sizes, etc.)
     """
     from model.transformer_rl_module import TransformerRLModule
-    return (
+    # Ensure our compat dist is registered (used by TorchPolicy paths if needed)
+    try:
+        from model.custom_dists import register_custom_action_dists
+        register_custom_action_dists()
+    except Exception:
+        pass
+
+    algo = (
         ImpalaConfig()
         .environment(env="TradingEnv", env_config=env_config)
         .framework("torch")
@@ -18,6 +25,8 @@ def get_impala_config(env_config, model_config, training_config):
             lr=training_config.get("learning_rate", 5e-4),
             minibatch_size=training_config.get("minibatch_size", 100),
             _enable_learner_api=True,
+            # Force policy path (if used) to pick our compat dist
+            model={"custom_action_dist": "compat_diag_gaussian"},
         )
         .resources(num_gpus=training_config.get("num_gpus", 1))
         .rollouts(
@@ -32,3 +41,4 @@ def get_impala_config(env_config, model_config, training_config):
             )
         )
     )
+    return algo

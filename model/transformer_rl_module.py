@@ -144,17 +144,31 @@ class TransformerRLModule(TorchRLModule):
 
    
     def get_inference_action_dist_cls(self):
-        try:
-            # Prefer Diagonal Gaussian for broad compatibility (has from_logits in older RLlib)
-            from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian, TorchCategorical
-            return TorchCategorical if self.is_discrete else TorchDiagGaussian
-        except Exception:
+        if self.is_discrete:
             try:
                 from ray.rllib.models.torch.torch_action_dist import TorchCategorical
                 return TorchCategorical
             except Exception:
-                # If imports fail entirely, raise to surface the issue
                 raise
+        # Continuous: prefer our compatibility wrapper that defines from_logits
+        try:
+            from model.custom_dists import CompatDiagGaussian
+            return CompatDiagGaussian
+        except Exception:
+            # Fallback: create a local wrapper if import fails
+            try:
+                import numpy as np
+                from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian
+                class _CompatDiagGaussian(TorchDiagGaussian):
+                    @classmethod
+                    def from_logits(cls, logits):
+                        return cls(logits, None)
+                    @staticmethod
+                    def required_model_output_shape(action_space, model_config):
+                        return int(np.prod(action_space.shape)) * 2
+                return _CompatDiagGaussian
+            except Exception:
+                raise RuntimeError("No compatible continuous action distribution available (from_logits missing)")
 
     def get_exploration_action_dist_cls(self):
         return self.get_inference_action_dist_cls()
