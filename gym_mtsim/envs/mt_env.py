@@ -264,13 +264,15 @@ class MtEnv(gym.Env):
                 trade_duration = order.get('holding_time', 1.0)  # in hours
                 if trade_duration > 0:
                     try:
-                        exponent = np.log1p(roi) * (24*365/trade_duration)
+                        # Clamp ROI to avoid log1p domain errors (roi > -1)
+                        safe_roi = float(np.clip(roi, -0.999999, None))
+                        exponent = np.log1p(safe_roi) * (24*365/max(trade_duration, 1e-6))
                         exponent = np.clip(exponent, -700, 700)
                         annualized_roi = np.exp(exponent) - 1
-                    except:
-                        annualized_roi = 0
+                    except Exception:
+                        annualized_roi = 0.0
                 else:
-                    annualized_roi = 0
+                    annualized_roi = 0.0
                 if len(self.trade_history) > 5:
                     recent_returns = np.array([t['profit']/t['margin'] for t in self.trade_history[-10:] if 'margin' in t])
                     if len(recent_returns) > 1:
@@ -349,10 +351,8 @@ class MtEnv(gym.Env):
         leverage_penalty = -self.leverage_penalty * (max(leverage - 1, 0) ** 2)
         total_reward += survival + leverage_penalty
         
-        dynamic_max = self.max_reward * regime_factor
-        dynamic_min = self.min_reward * regime_factor
-        
-        return float(np.clip(total_reward * self.reward_scaling, dynamic_min, dynamic_max))
+        return float(np.clip(total_reward, self.min_reward, self.max_reward))
+
     def _get_timeframe_factor(self) -> float:
         """Dynamic timeframe factor based on timeframe duration in minutes"""
         tf_minutes = min(self.timeframes)  # Use the most granular timeframe
@@ -829,7 +829,7 @@ class MtEnv(gym.Env):
         info.update(kwargs)
         return info
 
-    def _apply_action(self, action: np.ndarray) -> Tuple[Dict, Dict]:
+    def _apply_action(self, action: np.ndarray):
         action = np.clip(action, -1.0, 1.0)
         
         orders_info = {}
@@ -888,6 +888,10 @@ class MtEnv(gym.Env):
                 'error': '',
             }
             if not hold and orders_capacity > 0:
+                # Skip if no feasible volume after constraints
+                if modified_volume <= 0:
+                    orders_info[symbol]['error'] = 'no_volume'
+                    continue
                 try:
                     est_margin = self._estimate_margin(symbol, modified_volume)
                     projected_margin = self.simulator.margin + est_margin
@@ -911,12 +915,15 @@ class MtEnv(gym.Env):
                         limit_offset_bps=limit_offset_bps,
                         tif=tif
                     )
-                    orders_info[symbol].update({
-                        'order_id': order.id,
-                        'order_type': order_type,
-                        'fee': fee,
-                        'margin': order.margin,
-                    })
+                    if order is None:
+                        orders_info[symbol]['error'] = 'order_creation_failed'
+                    else:
+                        orders_info[symbol].update({
+                            'order_id': order.id,
+                            'order_type': order_type,
+                            'fee': fee,
+                            'margin': order.margin,
+                        })
                 except ValueError as e:
                     orders_info[symbol]['error'] = str(e)
 
