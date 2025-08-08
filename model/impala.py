@@ -20,14 +20,30 @@ def get_impala_config(env_config, model_config, training_config):
     num_rollout_workers = training_config.get("num_rollout_workers", 2)
     rollout_fragment_length = training_config.get("rollout_fragment_length", 50)
     num_envs_per_worker = training_config.get("num_envs_per_worker", 1)
-    num_aggregation_workers = training_config.get("num_aggregation_workers", 0)
     compress_observations = training_config.get("compress_observations", False)
     learner_queue_size = training_config.get("learner_queue_size", 16)
     min_time_s_per_iteration = training_config.get("min_time_s_per_iteration", 10)
 
     train_batch_size = training_config.get("batch_size", 512)
     lr = training_config.get("learning_rate", 5e-4)
-    minibatch_size = training_config.get("minibatch_size", 100)
+    # Accept 'auto' or int; if int, enforce IMPALA constraints
+    raw_minibatch = training_config.get("minibatch_size", "auto")
+    if isinstance(raw_minibatch, str) and raw_minibatch != "auto":
+        try:
+            raw_minibatch = int(raw_minibatch)
+        except Exception:
+            raw_minibatch = "auto"
+    if isinstance(raw_minibatch, int):
+        if raw_minibatch % rollout_fragment_length != 0 or raw_minibatch > train_batch_size:
+            # Snap down to the largest valid multiple <= train_batch_size, at least one fragment
+            max_mb = max(rollout_fragment_length, (train_batch_size // rollout_fragment_length) * rollout_fragment_length)
+            minibatch_size = max_mb
+        else:
+            minibatch_size = raw_minibatch
+    else:
+        minibatch_size = "auto"
+
+    # GPU resources only (CPU handled by defaults and main.py capping)
     num_gpus = training_config.get("num_gpus", 1)
 
     algo = (
@@ -48,7 +64,6 @@ def get_impala_config(env_config, model_config, training_config):
             num_rollout_workers=num_rollout_workers,
             rollout_fragment_length=rollout_fragment_length,
             num_envs_per_worker=num_envs_per_worker,
-            num_aggregation_workers=num_aggregation_workers,
             compress_observations=compress_observations,
         )
         .rl_module(

@@ -7,12 +7,8 @@ import sys
 import json
 import time
 import threading
-import config
 from datetime import datetime
 from pathlib import Path
-from ray import tune
-from model.algorithms import get_algorithm_class
-from ray.tune.registry import register_env
 from gym_mtsim.envs.mt_env import MtEnv
 import warnings
 
@@ -150,7 +146,7 @@ def load_backtest_config():
         print("⚠️ No backtest_config.yaml found, using defaults")
         return {
             'backtest': {
-                'model_path': "impala_transformer_mtsim_final",
+                'model_path': "ppo_transformer_mtsim_final",
                 'output': {
                     'report_path': "backtest_results/report.html",
                     'save_trades': True,
@@ -386,13 +382,11 @@ def start_gui_mode():
         os.chdir(original_dir)
         print("💡 Try running manually: cd ryan-dash && npm run dev")
 
-def env_creator(env_config: dict):
-    config = env_config.get("config", {})
-    return MtEnv(**config)
+# New: SB3 training pipeline replacing Ray/RLlib
 
 def run_training(config):
     print("\n" + "="*50)
-    print("🏋️ Starting Training Process (Ray RLlib)")
+    print("🏋️ Starting Training Process (Stable-Baselines3 PPO)")
     print("="*50)
     try:
         import inspect
@@ -400,20 +394,19 @@ def run_training(config):
             valid_args = inspect.signature(MtEnv.__init__).parameters
             return {k: v for k, v in cfg.items() if k in valid_args}
 
-        # Global seeds
         seed = int(config.get('seed', 42))
         set_global_seeds(seed)
 
-        # Auto-detect GPUs if not specified
         try:
             import torch
-            detected_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            device = 'cuda' if torch.cuda.is_available() and torch.cuda.device_count() > 0 else 'cpu'
         except Exception:
-            detected_gpus = 0
-        algo_key = config.get('algorithm', 'impala').lower()
+            device = 'cpu'
+
+        algo_key = config.get('algorithm', 'sb3_ppo').lower()
+        if algo_key not in ('sb3_ppo', 'ppo'):
+            algo_key = 'sb3_ppo'
         config.setdefault(algo_key, {})
-        if 'num_gpus' not in config[algo_key]:
-            config[algo_key]['num_gpus'] = detected_gpus
 
         env_config = config["env"]
         symbols = env_config.get('symbols', ['EURUSD'])
@@ -436,55 +429,65 @@ def run_training(config):
             pre_cache_env_config["use_cached_features"] = False
             MtEnv(**filter_env_config(pre_cache_env_config))
             print("✅ Feature engineering and caching complete.")
-
             config["env"]["use_cached_features"] = True
 
-        register_env("TradingEnv", lambda cfg: MtEnv(**filter_env_config(cfg)))
-        
-        algo_name = config.get("algorithm", "impala")
-        get_algo_config = get_algorithm_class(algo_name)
+        # Build VecEnv and policy kwargs via helpers
+        from model.ppo import make_vec_envs, build_policy_kwargs
+        from stable_baselines3 import PPO
 
-        model_config = {
-            "custom_model": "transformer_trading_model",
-            "custom_model_config": {
-                "features_dim": config.get("model", {}).get("features_dim", 256),
-                "transformer": config.get("model", {}).get("transformer", {})
-            },
-        }
+        sb3_cfg = config.get(algo_key, {})
+        n_envs = int(sb3_cfg.get('n_envs', 1))
+        use_subproc = bool(sb3_cfg.get('use_subproc', False))
+        env = make_vec_envs(config['env'], n_envs=n_envs, use_subproc=use_subproc)
 
-        algo_config = get_algo_config(
-            env_config=config["env"],
-            model_config=model_config,
-            training_config=config.get(algo_name, {})
+        policy_kwargs = build_policy_kwargs(config.get('model', {}))
+
+        # Hyperparams strictly from config
+        total_timesteps = int(sb3_cfg.get('total_timesteps', 1_000_000))
+        n_steps = int(sb3_cfg.get('n_steps', 2048))
+        batch_size = int(sb3_cfg.get('batch_size', 256))
+        n_epochs = int(sb3_cfg.get('n_epochs', 10))
+        learning_rate = float(sb3_cfg.get('learning_rate', 3e-4))
+        gamma = float(sb3_cfg.get('gamma', 0.99))
+        gae_lambda = float(sb3_cfg.get('gae_lambda', 0.95))
+        clip_range = float(sb3_cfg.get('clip_range', 0.2))
+        ent_coef = float(sb3_cfg.get('ent_coef', 0.0))
+        vf_coef = float(sb3_cfg.get('vf_coef', 0.5))
+        max_grad_norm = float(sb3_cfg.get('max_grad_norm', 0.5))
+
+        tensorboard_log = os.path.abspath('./tensorboard_logs')
+        os.makedirs(tensorboard_log, exist_ok=True)
+
+        print("\n🏃 Starting SB3 PPO training...")
+        model = PPO(
+            policy='MultiInputPolicy',
+            env=env,
+            verbose=1,
+            seed=seed,
+            device=device,
+            tensorboard_log=tensorboard_log,
+            policy_kwargs=policy_kwargs,
+            n_steps=n_steps,
+            batch_size=batch_size,
+            n_epochs=n_epochs,
+            learning_rate=learning_rate,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            clip_range=clip_range,
+            ent_coef=ent_coef,
+            vf_coef=vf_coef,
+            max_grad_norm=max_grad_norm,
         )
 
-        print("\n🏃 Starting Ray Tune training...")
-        abs_ray_results = os.path.abspath("./ray_results")
-        if os.name == "nt":
-            abs_ray_results_fixed = abs_ray_results.replace('\\', '/')
-            storage_uri = f"file:///{abs_ray_results_fixed}"
-        else:
-            storage_uri = f"file://{abs_ray_results}"
-        try:
-            analysis = tune.run(
-                algo_name.upper(),
-                config=algo_config.to_dict(),
-                # Scale to long heavy-env runs using timesteps_total instead of iterations
-                stop={"timesteps_total": int(config.get("stop", {}).get("timesteps_total", 1_000_000))},
-                storage_path=storage_uri,
-                checkpoint_at_end=True,
-                checkpoint_freq=5,
-                keep_checkpoints_num=3,
-                reuse_actors=True,
-            )
-        except KeyboardInterrupt:
-            print("\n🛑 Training interrupted by user. Attempting graceful shutdown...")
-            return
-        print("\n✅ Training completed. Results in ./ray_results")
+        model.learn(total_timesteps=total_timesteps, progress_bar=True)
+
+        # Save final model path from config
+        save_name = sb3_cfg.get('model_path', 'ppo_transformer_mtsim_final')
+        model.save(save_name)
+        print(f"\n✅ Training completed. Model saved to {os.path.abspath(save_name + '.zip')}")
     except Exception as e:
         print("\n❌ Training Failed:")
         print(f"Error: {str(e)}")
-        print("\n💡 If you use custom environment loops, always unpack as (obs, info) = env.reset() and (obs, reward, terminated, truncated, info) = env.step(action)")
         raise
 
 if __name__ == "__main__":

@@ -1,8 +1,4 @@
-from .impala import get_impala_config
-
+# Deprecated: Ray IMPALA configuration removed during SB3 migration.
 
 def get_algorithm_class(algo_name):
-    name = algo_name.lower()
-    if name == "impala":
-        return get_impala_config
-    raise ValueError(f"Unknown or unsupported algorithm: {algo_name}. Only 'impala' is supported.")
+    raise ValueError("Ray/RLlib algorithms are no longer supported. Use Stable-Baselines3 via main.py run_training().")

@@ -305,11 +305,11 @@ def get_system_config():
     """Get system configuration"""
     try:
         with open('config/config.yaml', 'r') as f:
-            config = yaml.safe_load(f)
+            cfg = yaml.safe_load(f)
         return jsonify({
-            'model': config.get('model', {}),
-            'env': config.get('env', {}),
-            'impala': config.get('impala', {}),
+            'model': cfg.get('model', {}),
+            'env': cfg.get('env', {}),
+            'sb3_ppo': cfg.get('sb3_ppo', {}),
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -319,8 +319,29 @@ def update_system_config():
     """Update system configuration"""
     data = request.json
     try:
+        # Prefer SB3 PPO section if provided; else map legacy IMPALA fields
+        sb3 = data.get('sb3_ppo')
+        if sb3 is None and 'impala' in data:
+            imp = data['impala']
+            sb3 = {
+                'total_timesteps': imp.get('total_timesteps', 2_000_000),
+                'n_steps': imp.get('rollout_fragment_length', 2048),
+                'batch_size': imp.get('minibatch_size', imp.get('batch_size', 256)),
+                'n_epochs': 10,
+                'learning_rate': imp.get('learning_rate', 3e-4),
+                'gamma': 0.99,
+                'gae_lambda': 0.95,
+                'clip_range': 0.2,
+                'ent_coef': 0.0,
+                'vf_coef': 0.5,
+                'max_grad_norm': 0.5,
+                'n_envs': max(1, int(imp.get('num_rollout_workers', 1))),
+                'use_subproc': False,
+                'checkpoint_every_steps': 200000,
+                'model_path': 'ppo_transformer_mtsim_final',
+            }
         with open('config/config.yaml', 'w') as f:
-            config_content = f"""algorithm: impala
+            config_content = f"""algorithm: sb3_ppo
 
 model:
   features_dim: {data['model']['features_dim']}
@@ -349,13 +370,22 @@ env:
   atr_multiplier: {data['env']['atr_multiplier']}
   use_cached_features: {str(data['env']['use_cached_features']).lower()}
 
-impala:
-  learning_rate: {data['impala']['learning_rate']}
-  batch_size: {data['impala']['batch_size']}
-  minibatch_size: {data['impala']['minibatch_size']}
-  num_rollout_workers: {data['impala']['num_rollout_workers']}
-  rollout_fragment_length: {data['impala']['rollout_fragment_length']}
-  num_gpus: {data['impala']['num_gpus']}
+sb3_ppo:
+  n_envs: {sb3['n_envs']}
+  use_subproc: {str(sb3['use_subproc']).lower()}
+  total_timesteps: {sb3['total_timesteps']}
+  n_steps: {sb3['n_steps']}
+  batch_size: {sb3['batch_size']}
+  n_epochs: {sb3['n_epochs']}
+  learning_rate: {sb3['learning_rate']}
+  gamma: {sb3['gamma']}
+  gae_lambda: {sb3['gae_lambda']}
+  clip_range: {sb3['clip_range']}
+  ent_coef: {sb3['ent_coef']}
+  vf_coef: {sb3['vf_coef']}
+  max_grad_norm: {sb3['max_grad_norm']}
+  checkpoint_every_steps: {sb3['checkpoint_every_steps']}
+  model_path: {sb3['model_path']}
 """
             f.write(config_content)
         return jsonify({'status': 'updated'})

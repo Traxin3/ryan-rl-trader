@@ -1,6 +1,6 @@
 # Core RL and ML libraries
-stable-baselines3>=2.0.0
-gymnasium>=0.29.0
+stable-baselines3==2.0.0
+gymnasium==0.28.1
 torch>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0
@@ -25,4 +25,4 @@ argparse
 # Development and testing
 pytest>=7.4.0
 black>=23.0.0
-flake8>=6.0.0 
+flake8>=6.0.0

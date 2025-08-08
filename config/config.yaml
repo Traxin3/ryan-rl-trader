@@ -1,4 +1,4 @@
-algorithm: impala
+algorithm: sb3_ppo
 
 # Model/Transformer hyperparameters
 model:
@@ -31,25 +31,27 @@ env:
   execution_cost_penalty_weight: 0.1
   max_daily_drawdown: 0.2
 
-# IMPALA training hyperparameters
-impala:
-  learning_rate: 0.0005
-  # Rollout scaling for heavy envs
-  num_rollout_workers: 4           # increase with CPU cores
-  num_envs_per_worker: 2           # vectorize envs per worker
-  rollout_fragment_length: 200     # longer fragments amortize overhead
-  num_aggregation_workers: 1       # offload batch collation
-  # Batching
-  batch_size: 8192                 # learner batch size
-  minibatch_size: 1024             # per-epoch minibatch
-  learner_queue_size: 32
-  # Compression for large observations
-  compress_observations: true
-  # GPU
-  num_gpus: 1
-  # Reporting cadence
-  min_time_s_per_iteration: 10
+# Stable-Baselines3 PPO hyperparameters
+sb3_ppo:
+  # parallel envs
+  n_envs: 1           # set >1 for vectorized envs
+  use_subproc: false  # true on Linux/macOS for SubprocVecEnv
+  # training
+  total_timesteps: 2000000
+  n_steps: 2048
+  batch_size: 256
+  n_epochs: 10
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  # checkpointing
+  checkpoint_every_steps: 200000
+  model_path: ppo_transformer_mtsim_final
 
-# Global stop criteria (overrides iteration-based)
+# Global stop criteria retained for compatibility with CLI wrappers
 stop:
   timesteps_total: 2000000
