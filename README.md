@@ -2,174 +2,148 @@
 
 [![Project Status](https://img.shields.io/badge/Status-🚧_In_Development-orange?style=for-the-badge)]()  
 [![Made with Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge&logo=python)]()  
-[![Dashboard](https://img.shields.io/badge/Next.js-Futuristic_Dashboard-black?style=for-the-badge&logo=next.js)]()  
+[![RL Stack](https://img.shields.io/badge/Stable--Baselines3-PPO-3C91E6?style=for-the-badge)]()  
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
 
 <p align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?size=24&duration=4000&pause=1000&color=00FFD1&center=true&vCenter=true&width=650&lines=🤖+Reinforcement+Learning+Trading;🎛️+Real-Time+Next.js+Dashboard;📊+Now+with+Professional+Backtesting">
+  <img src="https://readme-typing-svg.herokuapp.com?size=24&duration=4000&pause=1000&color=00FFD1&center=true&vCenter=true&width=700&lines=🤖+Reinforcement+Learning+Trading;🧠+Stable-Baselines3+PPO+%2B+Transformer;📊+Backtesting+%26+Research" />
 </p>
 
 ---
 
-## ✨ Features
+## ✨ Highlights
 
-### 🚀 Core RL System
-- **PPO Algorithm** → Transformer-powered PPO (Multi-Agent coming soon)
-- **Multi-timeframe Analysis** → 1m, 5m, 15m, 1h, etc.
-- **Feature Engineering** → 100+ features + PCA optimization
-- **Risk Management** → Dynamic SL/TP + position sizing
-- **Market Structure Analysis** → Liquidity-based signals
+- Stable-Baselines3 PPO with a custom Transformer features extractor
+- Multi-timeframe analysis (1m, 5m, 15m, 1h, ...)
+- Dict observations with liquidity and orders fusion
+- Deterministic feature cache for faster training
+- Risk controls: dynamic SL/TP and position sizing
+- VectorBT backtesting with rich analytics
 
-### 🎛️ GUI Dashboard
-- **Live Monitoring** → Balance, equity, Sharpe ratio, and system metrics
-- **Training Control** → Start/stop, save models, export data
-- **Config Management** → Edit model/env params live
-- **History Tracking** → Compare training runs & performance
-- **System Monitoring** → GPU/CPU/memory live
-- **Smooth UI** → Subtle animations, clean layout
-
-### 📊 New: VectorBT Backtesting
-- **Professional Analytics**: Sharpe, Sortino, max drawdown metrics
-- **Interactive Reports**: HTML reports with trade-by-trade analysis
-- **Flexible Configuration**: Test specific symbols, timeframes, and periods
-- **Visualization**: Equity curves, underwater plots, and trade timelines
+> Note: The dashboard (ryan-dash) is currently inactive and removed from this README.
 
 ---
 
-<p align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?size=20&duration=3000&pause=1000&color=FFB800&center=true&vCenter=true&width=600&lines=🚀+Quick+Start">
-</p>
+## 🆕 What’s New
 
-### 1️⃣ Install Dependencies
+- Migrated off Ray/RLlib → standardized on Stable-Baselines3 PPO
+- New SB3 Transformer extractor that wraps the internal TransformerFeatureExtractor
+- Safer sequence handling (pad/trim) and fusion of liquidity/orders branches
+- Config-driven training via `config/config.yaml` (algorithm: `sb3_ppo`)
+- Vectorized envs (Windows-safe) and cleaner training pipeline (no callbacks)
+- Backtesting continues to use the saved SB3 model
+
+---
+
+## 🚀 Quick Start
+
+1) Install dependencies
 ```bash
 git clone https://github.com/Traxin3/ryan-rl-trader
 cd ryan-rl-trader
 pip install -r requirements.txt
 ```
 
-### 2️⃣ Run Modes
-#### GUI Mode (Recommended)
-```bash
-python main.py --gui
-```
-- Starts dashboard at http://localhost:3000
-- Real-time monitoring and control
-- Visualize training and backtest results
-
-#### Training Mode
+2) Train
 ```bash
 python main.py --train
 ```
-- Headless training session
-- Saves model to `ppo_transformer_mtsim_final`
-- TensorBoard logging available
+- Saves the model to the path configured in `config/config.yaml`
+- TensorBoard logs in `tensorboard_logs/`
 
-#### Backtest Mode
+3) Backtest
 ```bash
 python main.py --backtest
 ```
-- Runs backtest with default settings
-- Generates comprehensive HTML report
-- Saves results to `backtest_results/`
+- Generates analytics and reports (see backtest module)
 
-#### Combined Mode
+4) Optional: View TensorBoard
 ```bash
-python main.py --gui --train --backtest
+tensorboard --logdir tensorboard_logs
 ```
-- Runs all components together
-- Dashboard shows live training and backtest results
 
-### 📊 Dashboard Tabs
-- ✅ **Overview** – Metrics, GPU/CPU, charts
-- 🎯 **Training** – Progress, hyperparameters, rewards
-- 📈 **Backtest (NEW)** – Interactive HTML reports, strategy comparisons
-- ⚙️ **Config** – Symbols, timeframes, risk settings
-- 📚 **History** – Training runs, performance comparisons
-- 🖥 **System** – Logs & resource usage
+---
 
-<p align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?size=20&duration=3000&pause=1000&color=5BFF7F&center=true&vCenter=true&width=650&lines=⚙️+Configuration+via+YAML">
-</p>
+## ⚙️ Configuration (YAML)
 
-### 🔧 Main Config (`config/config.yaml`)
+`config/config.yaml`
 ```yaml
-ppo:
-  learning_rate: 0.0004
+algorithm: sb3_ppo
+
+sb3_ppo:
+  total_timesteps: 2000000
+  n_envs: 4
+  use_subproc: false
   n_steps: 2048
-  batch_size: 256
+  batch_size: 512
+  n_epochs: 10
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  model_path: "ppo_transformer_mtsim_final.zip"
+
+model:
+  transformer:
+    d_model: 256
+    nhead: 8
+    num_layers: 4
+    dropout: 0.1
+    scales: [1, 2, 4]
 
 env:
-  symbols: ["EURUSD"]
-  timeframes: [15]
-  max_leverage: 2.0
+  symbol: "EURUSD"
+  timeframe: 15
+  window_size: 256
 ```
-
-### 📈 Backtest Config (`config/backtest_config.yaml`)
-```yaml
-backtest:
-  model_path: "ppo_transformer_mtsim_final"
-  test_start: "2023-01-01"
-  test_end: "2023-06-30"
-  output:
-    report_path: "backtest_results/report.html"
-```
-
-### 🛠 Command Line Options
-| Option        | Description                  | Example                         |
-|---------------|------------------------------|---------------------------------|
-| `--gui`       | Start the dashboard          | `python main.py --gui`         |
-| `--train`     | Run training session         | `python main.py --train`       |
-| `--backtest`  | Run backtest                | `python main.py --backtest`    |
-| `--test_start`| Backtest start date         | `--test_start "2023-01-01"`   |
-| `--test_end`  | Backtest end date           | `--test_end "2023-06-30"`     |
-| `--symbol`    | Override symbol             | `--symbol EURUSD`             |
-| `--timeframe` | Override timeframe          | `--timeframe 5`               |
 
 ---
 
-## 🏗 Architecture
-### RL Core
-- **MtEnv** → Custom Gym environment for MetaTrader sim
-- **TransformerPolicy** → PPO + Transformer
-- **MtSimulator** → Advanced trading simulator
-- **FeatureEngine** → Feature caching + PCA
+## 🏗 Architecture (Brief)
 
-### Dashboard Core
-- **Next.js + Tailwind** → Clean futuristic UI
-- **Framer Motion** → Subtle transitions
-- **Recharts** → Live metrics
-- **Lucide React** → Icon library
-
-### Backtesting Core
-- **VectorBT Integration** → Professional-grade backtesting
-- **Trade Analytics** → Sharpe, Sortino, drawdowns
-- **HTML Reports** → Interactive trade exploration
+- MtEnv + MtSimulator (execution, market impact, orders)
+- Transformer-based features extractor (with liquidity/orders fusion)
+- Stable-Baselines3 PPO (MultiInput policy)
+- VectorBT backtesting and reporting
 
 ---
 
-## 🛠 Troubleshooting
-- **Dashboard won’t start?** → Check Node.js install
-- **Training errors?** → Validate Python deps & CUDA
-- **Memory issues?** → Lower `batch_size` or `window_size`
-- Run debug mode:
-```bash
-python main.py --train --verbose
-cd ryan-dash && npm run dev
-```
+## 🧪 Troubleshooting
+
+- Ensure dependency pairing: `stable-baselines3==2.0.0` with `gymnasium==0.28.1`
+- CUDA issues: verify your PyTorch build matches your CUDA toolkit
+- OOM: reduce `batch_size`, `n_steps`, or `window_size`
+
+---
+
+## 🗺️ WIP / Roadmap
+
+Heavily working on the model and training recipes. Still need to:
+- Clean up code and modules
+- Update functionality and configs
+- Enhance pipelines and data flow
+- Expand tests and benchmarks
 
 ---
 
 ## 🤝 Contributing
-1. Fork repo
-2. Create feature branch
-3. Make changes
-4. Open PR 🚀
+
+1. Fork the repo
+2. Create a feature branch
+3. Commit your changes
+4. Open a PR
+
+---
+
+## 📣 Shoutouts / Contact
+
+- Discord: `seany519`
 
 ---
 
 ## 📜 License
-MIT License – see [LICENSE](LICENSE)
 
-<p align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?size=22&duration=3000&pause=1000&color=FF00A2&center=true&vCenter=true&width=700&lines=🚀+Ready+to+Trade+with+AI%3F;🎛️+Fire+up+the+Dashboard+and+Backtest+Strategies!">
-</p>
+MIT License – see [LICENSE](LICENSE)
