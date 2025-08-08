@@ -123,7 +123,8 @@ class TransformerRLModule(TorchRLModule):
             mean = self.mean_head(h)
             log_std = self.log_std_head(h)
             logits = torch.cat([mean, log_std], dim=-1)
-        return {"action_dist_inputs": logits}
+        vf = self.value_head(features).squeeze(-1)
+        return {"action_dist_inputs": logits, "vf": vf, "vf_preds": vf}
 
     @override(TorchRLModule)
     def _forward_exploration(self, batch):
@@ -139,8 +140,9 @@ class TransformerRLModule(TorchRLModule):
             mean = self.mean_head(h)
             log_std = self.log_std_head(h)
             logits = torch.cat([mean, log_std], dim=-1)
-        value = self.value_head(features)
-        return {"action_dist_inputs": logits, "values": value.squeeze(-1)}
+        vf = self.value_head(features).squeeze(-1)
+        # Provide both keys to satisfy RLModule learner and legacy TorchPolicy postprocessing
+        return {"action_dist_inputs": logits, "values": vf, "vf": vf, "vf_preds": vf}
 
    
     def get_inference_action_dist_cls(self):
