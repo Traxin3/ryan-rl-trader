@@ -920,6 +920,51 @@ class MtEnv(gym.Env):
 
         return orders_info, closed_orders_info
 
+    def _get_modified_volume(self, symbol: str, volume_signal: float) -> float:
+        """Project a continuous volume signal [-1,1] to a feasible order volume.
+        - Applies a small dead-zone to avoid tiny/accidental orders
+        - Respects instrument volume_min/step/max
+        - Scales down to honor max_leverage based on current margin
+        Returns a non-negative volume (magnitude only)."""
+        try:
+            si = self.simulator.symbols_info[symbol]
+            vol_min = float(si.volume_min)
+            vol_max = float(si.volume_max)
+            step = float(si.volume_step) if float(si.volume_step) > 0 else vol_min
+        except Exception:
+            # Fallback sensible defaults
+            vol_min, vol_max, step = 0.01, 100.0, 0.01
+
+        abs_sig = float(abs(volume_signal))
+        # Dead-zone: treat small signals as no-trade
+        if abs_sig < 0.05:
+            return 0.0
+
+        # Map signal to [vol_min, vol_max]
+        raw_vol = vol_min + abs_sig * (vol_max - vol_min)
+
+        # Enforce leverage cap by scaling down if needed
+        try:
+            est_margin = self._estimate_margin(symbol, raw_vol)
+            # Max extra margin allowed
+            margin_cap = max(0.0, self.max_leverage * (self.simulator.balance + 1e-6) - self.simulator.margin)
+            if est_margin > margin_cap and est_margin > 0:
+                scale = margin_cap / est_margin
+                raw_vol *= max(0.0, min(1.0, scale))
+        except Exception:
+            pass
+
+        # Quantize to volume_step (floor) and clip
+        if step <= 0:
+            step = vol_min
+        quant_vol = float(np.floor(max(raw_vol, 0.0) / step) * step)
+        quant_vol = float(min(max(quant_vol, 0.0), vol_max))
+
+        # If below instrument minimum after constraints, skip order
+        if quant_vol < vol_min:
+            return 0.0
+        return quant_vol
+
     def _estimate_margin(self, symbol: str, volume: float) -> float:
         si = self.simulator.symbols_info[symbol]
         price = float(self.simulator.price_at(symbol, self.simulator.current_time)['Close'])
