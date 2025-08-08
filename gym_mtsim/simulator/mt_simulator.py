@@ -423,6 +423,7 @@ class MtSimulator:
         self.enable_realistic_execution = enable_realistic_execution
         self.market_impact_model = MarketImpactModel() if enable_realistic_execution else None
         self.execution_history = []  # Track execution costs
+        self.pending_limits: List[Dict] = []
         
         data_dir = os.path.join(os.path.dirname(__file__), '..', 'data_cache')
         os.makedirs(data_dir, exist_ok=True)
@@ -521,6 +522,9 @@ class MtSimulator:
             self._update_order_profit(order)
             self.equity += order.profit
 
+        if self.enable_realistic_execution and self.market_impact_model and self.pending_limits:
+            self._process_pending_limits(delta_time)
+
         while self.margin_level < self.stop_out_level and len(self.orders) > 0:
             most_unprofitable_order = min(self.orders, key=lambda order: order.profit)
             self.close_order(most_unprofitable_order)
@@ -553,7 +557,10 @@ class MtSimulator:
 
     def create_order(
         self, order_type: OrderType, symbol: str, volume: float, fee: float = 0.0005,
-        raise_exception: bool = True
+        raise_exception: bool = True,
+        market_order: bool = True,
+        limit_offset_bps: float = 0.0,
+        tif: str = 'IOC'
     ) -> Optional[Order]:
         self._check_current_time()
         self._check_volume(symbol, volume)
@@ -561,12 +568,18 @@ class MtSimulator:
             raise ValueError(f"negative fee '{fee}'")
 
         if self.hedge:
-            return self._create_hedged_order(order_type, symbol, volume, fee, raise_exception)
+            return self._create_hedged_order(
+                order_type, symbol, volume, fee, raise_exception,
+                market_order=market_order, limit_offset_bps=limit_offset_bps, tif=tif
+            )
         return self._create_unhedged_order(order_type, symbol, volume, fee, raise_exception)
 
     def _create_hedged_order(
         self, order_type: OrderType, symbol: str, volume: float, fee: float,
-        raise_exception: bool
+        raise_exception: bool,
+        market_order: bool = True,
+        limit_offset_bps: float = 0.0,
+        tif: str = 'IOC'
     ) -> Optional[Order]:
         order_id = len(self.closed_orders) + len(self.orders) + 1
         entry_time = self.current_time
@@ -587,91 +600,188 @@ class MtSimulator:
                 current_time=entry_time,
                 price_data=recent_prices,
                 current_price=current_price,
-                market_order=True
+                market_order=market_order,
+                limit_offset_bps=limit_offset_bps,
+                tif=tif
             )
+            remaining_after = float(execution_info.get('remaining_volume', 0.0))
+            filled_step = max(0.0, volume - remaining_after)
+            filled_step = self._quantize_volume(symbol, filled_step)
+            tif_u = str(tif).upper()
+            if tif_u == 'FOK' and filled_step < volume:
+                filled_step = 0.0
+                remaining_after = volume
             
             self.execution_history.append({
                 'time': entry_time,
                 'symbol': symbol,
                 'order_type': order_type.name,
-                'volume': volume,
+                'requested_volume': volume,
+                'filled_volume': filled_step,
+                'remaining_after_step': remaining_after,
                 'market_price': current_price,
-                'execution_price': execution_price,
+                'execution_price': execution_price if filled_step > 0 else float('nan'),
                 **execution_info
             })
             
-            entry_price = execution_price
+            created_order: Optional[Order] = None
+            
+            if filled_step > 0.0:
+                entry_price = execution_price
+                exit_time = entry_time
+                exit_price = entry_price
+                order = Order(
+                    order_id, order_type, symbol, filled_step, fee,
+                    entry_time, entry_price, exit_time, exit_price
+                )
+                self._update_order_profit(order)
+                self._update_order_margin(order)
+                if order.margin > self.free_margin + order.profit:
+                    if raise_exception:
+                        raise ValueError(
+                            f"low free margin (order margin={order.margin}, order profit={order.profit}, "
+                            f"free margin={self.free_margin})"
+                        )
+                else:
+                    self.equity += order.profit
+                    self.margin += order.margin
+                    self.orders.append(order)
+                    created_order = order
+            
+            if remaining_after > 0.0 and tif_u in ('GTC', 'GTD') and not execution_info.get('crossed', False):
+                pending = {
+                    'order_type': order_type,
+                    'symbol': symbol,
+                    'volume_remaining': float(remaining_after),
+                    'limit_offset_bps': float(limit_offset_bps),
+                    'tif': tif_u,
+                    'placed_time': entry_time,
+                    'queued_since': entry_time,
+                    'queued_time_sec': 0.0,
+                    'steps_waited': 0,
+                }
+                if tif_u == 'GTD':
+                    pending['expire_time'] = entry_time + timedelta(days=1)
+                self.pending_limits.append(pending)
+            
+            return created_order
         else:
             entry_price = self.price_at(symbol, entry_time)['Close']
-        
-        exit_time = entry_time
-        exit_price = entry_price
+            
+            exit_time = entry_time
+            exit_price = entry_price
 
-        order = Order(
-            order_id, order_type, symbol, volume, fee,
-            entry_time, entry_price, exit_time, exit_price
-        )
-        self._update_order_profit(order)
-        self._update_order_margin(order)
-
-        if order.margin > self.free_margin + order.profit:
-            if raise_exception:
-                raise ValueError(
-                    f"low free margin (order margin={order.margin}, order profit={order.profit}, "
-                    f"free margin={self.free_margin})"
-                )
-            return None
-
-        self.equity += order.profit
-        self.margin += order.margin
-        self.orders.append(order)
-        return order
-
-    def _create_unhedged_order(
-        self, order_type: OrderType, symbol: str, volume: float, fee: float,
-        raise_exception: bool
-    ) -> Optional[Order]:
-        if symbol not in map(lambda order: order.symbol, self.orders):
-            return self._create_hedged_order(order_type, symbol, volume, fee, raise_exception)
-
-        old_order: Order = self.symbol_orders(symbol)[0]
-
-        if old_order.type == order_type:
-            new_order = self._create_hedged_order(order_type, symbol, volume, fee, raise_exception)
-            if new_order is None:
-                return None
-            self.orders.remove(new_order)
-
-            entry_price_weighted_average = np.average(
-                [old_order.entry_price, new_order.entry_price],
-                weights=[old_order.volume, new_order.volume]
+            order = Order(
+                order_id, order_type, symbol, volume, fee,
+                entry_time, entry_price, exit_time, exit_price
             )
+            self._update_order_profit(order)
+            self._update_order_margin(order)
 
-            old_order.volume += new_order.volume
-            old_order.profit += new_order.profit
-            old_order.margin += new_order.margin
-            old_order.entry_price = entry_price_weighted_average
-            old_order.fee = max(old_order.fee, new_order.fee)
+            if order.margin > self.free_margin + order.profit:
+                if raise_exception:
+                    raise ValueError(
+                        f"low free margin (order margin={order.margin}, order profit={order.profit}, "
+                        f"free margin={self.free_margin})"
+                    )
+                return None
 
-            return old_order
+            self.equity += order.profit
+            self.margin += order.margin
+            self.orders.append(order)
+            return order
 
-        if volume >= old_order.volume:
-            self.close_order(old_order)
-            if volume > old_order.volume:
-                return self._create_hedged_order(order_type, symbol, volume - old_order.volume, fee)
-            return old_order
+    def _quantize_volume(self, symbol: str, volume: float) -> float:
+        """Quantize volume to the instrument's volume_step (floor)."""
+        step = float(self.symbols_info[symbol].volume_step)
+        if step <= 0:
+            return float(volume)
+        return float(np.floor(max(volume, 0.0) / step) * step)
 
-        partial_profit = (volume / old_order.volume) * old_order.profit
-        partial_margin = (volume / old_order.volume) * old_order.margin
+    def _process_pending_limits(self, delta_time: timedelta) -> None:
+        """Attempt fills for resting GTC/GTD limits; create orders for filled parts; update queue metrics."""
+        still_pending: List[Dict] = []
+        for p in list(self.pending_limits):
+            symbol = p['symbol']
+            tif = p['tif']
+            expire_time = p.get('expire_time')
+            if tif == 'GTD' and expire_time and self.current_time >= expire_time:
+                self.execution_history.append({
+                    'time': self.current_time,
+                    'symbol': symbol,
+                    'order_type': p['order_type'].name,
+                    'volume': 0.0,
+                    'market_price': self.price_at(symbol, self.current_time)['Close'],
+                    'execution_price': float('nan'),
+                    'event': 'GTD_EXPIRED',
+                    'queued_time_sec': p.get('queued_time_sec', 0.0),
+                    'steps_waited': p.get('steps_waited', 0),
+                })
+                continue  # drop
 
-        old_order.volume -= volume
-        old_order.profit -= partial_profit
-        old_order.margin -= partial_margin
+            df = self.symbols_data[(symbol, self.timeframes[0])]
+            nearest = self.nearest_time(symbol, self.current_time)
+            current_idx = df.index.get_loc(nearest)
+            lookback = min(48, current_idx)
+            recent_prices = df.iloc[max(0, current_idx - lookback):current_idx + 1]['Close'].values
+            current_price = df.iloc[current_idx]['Close']
 
-        self.balance += partial_profit
-        self.margin -= partial_margin
+            rem_vol = float(p['volume_remaining'])
+            execution_price, execution_info = self.market_impact_model.get_execution_price(
+                order_type=p['order_type'],
+                volume=rem_vol,
+                symbol=symbol,
+                current_time=self.current_time,
+                price_data=recent_prices,
+                current_price=current_price,
+                market_order=False,
+                limit_offset_bps=p['limit_offset_bps'],
+                tif='GTC'
+            )
+            remaining_after = float(execution_info.get('remaining_volume', rem_vol))
+            filled_step = max(0.0, rem_vol - remaining_after)
+            filled_step = self._quantize_volume(symbol, filled_step)
 
-        return old_order
+            p['queued_time_sec'] = p.get('queued_time_sec', 0.0) + float(delta_time.total_seconds())
+            p['steps_waited'] = p.get('steps_waited', 0) + 1
+            p['cum_queue_outflow_rate'] = p.get('cum_queue_outflow_rate', 0.0) + float(execution_info.get('queue_outflow_rate', 0.0))
+
+            self.execution_history.append({
+                'time': self.current_time,
+                'symbol': symbol,
+                'order_type': p['order_type'].name,
+                'requested_volume': rem_vol,
+                'filled_volume': filled_step,
+                'remaining_after_step': max(0.0, remaining_after - (rem_vol - filled_step)),
+                'market_price': current_price,
+                'execution_price': execution_price if filled_step > 0 else float('nan'),
+                **execution_info,
+                'event': 'GTC_STEP'
+            })
+
+            if filled_step > 0:
+                if filled_step >= self.symbols_info[symbol].volume_min:
+                    try:
+                        self._create_hedged_order(
+                            p['order_type'], symbol, filled_step, fee=0.0005, raise_exception=False,
+                            market_order=True  # we've already priced; but to book it, use direct price
+                        )
+                    except Exception:
+                        pass
+            p['volume_remaining'] = max(0.0, remaining_after)
+            if p['volume_remaining'] > 0.0:
+                still_pending.append(p)
+            else:
+                self.execution_history.append({
+                    'time': self.current_time,
+                    'symbol': symbol,
+                    'order_type': p['order_type'].name,
+                    'event': 'GTC_FILLED',
+                    'total_queued_time_sec': p.get('queued_time_sec', 0.0),
+                    'steps_waited': p.get('steps_waited', 0),
+                    'avg_queue_outflow_rate': p.get('cum_queue_outflow_rate', 0.0) / max(p.get('steps_waited', 1), 1)
+                })
+        self.pending_limits = still_pending
 
     def close_order(self, order: Order) -> float:
         self._check_current_time()

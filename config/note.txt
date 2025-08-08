@@ -1,3 +1,0 @@
-# TODO
-Gotta later moduralize main.py, better pipeline
-and management.

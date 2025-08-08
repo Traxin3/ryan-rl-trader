@@ -4,8 +4,27 @@ from sklearn.feature_selection import VarianceThreshold, SelectKBest, f_regressi
 from sklearn.preprocessing import StandardScaler, RobustScaler
 import os
 import pickle
+import hashlib
+import glob
 
 class OptimizedFeatureEngine:
+
+    def load_cache(self):
+        """Load cached features from disk without recomputation."""
+        cache_file = self.cache_path or 'feature_cache.pkl'
+        import glob
+        base, ext = os.path.splitext(cache_file)
+        pattern = f"{base}_*.pkl"
+        candidates = glob.glob(pattern)
+        if not candidates:
+            raise FileNotFoundError(f"No cached features found matching {pattern}")
+        cache_file = max(candidates, key=os.path.getmtime)
+        with open(cache_file, 'rb') as f:
+            obj = pickle.load(f)
+        features = obj.get('features', None)
+        if features is None:
+            raise RuntimeError(f"Cached features file {cache_file} is missing 'features' key.")
+        return features
     """
     Enhanced feature generator for RL trading environments with improved compression and selection.
     - Uses RobustScaler for better handling of outliers in financial data
@@ -19,12 +38,16 @@ class OptimizedFeatureEngine:
                  min_components: int = 20,
                  max_components: int = 50,
                  variance_threshold: float = 1e-6, 
-                 cache_path: str = None):
+                 cache_path: str = None,
+                 reuse_existing: bool = True,
+                 keep_last: int = 3):
         self.target_variance = target_variance
         self.min_components = min_components
         self.max_components = max_components
         self.variance_threshold = variance_threshold
         self.cache_path = cache_path
+        self.reuse_existing = reuse_existing
+        self.keep_last = keep_last
 
         self.var_thresh = None
         self.scaler = None
@@ -54,22 +77,26 @@ class OptimizedFeatureEngine:
         y: np.ndarray of shape (n_samples,) - target for feature selection (optional)
         """
         cache_file = self.cache_path or 'feature_cache.pkl'
-        cache_id = f"{X.shape}_{self.target_variance}_{self.min_components}_{self.max_components}"
-        cache_file = cache_file.replace('.pkl', f'_{abs(hash(cache_id))}.pkl')
+        base, ext = os.path.splitext(cache_file)
+        if self.reuse_existing:
+            features, obj, path = self._find_valid_cached_features(base, X.shape)
+            if features is not None:
+                self.var_thresh = obj['var_thresh']
+                self.scaler = obj['scaler']
+                self.feature_selector = obj.get('feature_selector')
+                self.pca = obj['pca']
+                self.n_components_used = obj['n_components_used']
+                print(f"✅ Loaded cached features: {features.shape} from {os.path.basename(path)}")
+                return features
+
+        cache_id = self._stable_cache_id(X.shape)
+        cache_file = f"{base}_{cache_id}.pkl"
 
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'rb') as f:
                     obj = pickle.load(f)
                 features = obj.get('features', None)
-                if isinstance(features, dict):
-                    print(f"❌ Corrupted cache: features is a dict, not numpy array. Ignoring cache and recomputing.")
-                    try:
-                        os.remove(cache_file)
-                        print(f"🗑️ Deleted corrupted cache file: {cache_file}")
-                    except Exception as e:
-                        print(f"⚠️ Failed to delete corrupted cache file: {e}")
-                    features = None
                 if (features is not None and hasattr(features, 'shape') and features.shape[0] == X.shape[0] and 
                     obj.get('target_variance', 0) >= self.target_variance * 0.95):
                     self.var_thresh = obj['var_thresh']
@@ -77,7 +104,7 @@ class OptimizedFeatureEngine:
                     self.feature_selector = obj.get('feature_selector')
                     self.pca = obj['pca']
                     self.n_components_used = obj['n_components_used']
-                    print(f"✅ Loaded cached features: {features.shape}")
+                    print(f"✅ Loaded deterministic cache: {features.shape}")
                     return features
             except Exception as e:
                 print(f"⚠️ Cache loading failed: {e}")
@@ -124,6 +151,7 @@ class OptimizedFeatureEngine:
             with open(cache_file, 'wb') as f:
                 pickle.dump(cache_data, f)
             print(f"💾 Cached features to: {cache_file}")
+            self._cleanup_old_caches(base)
         except Exception as e:
             print(f"⚠️ Caching failed: {e}")
 
@@ -203,3 +231,41 @@ class OptimizedFeatureEngine:
             'total_explained_variance': np.sum(self.pca.explained_variance_ratio_),
             'feature_selection_used': self.feature_selector is not None
         }
+
+    def _stable_cache_id(self, X_shape) -> str:
+        """Create a deterministic cache id based on data shape and params."""
+        key = f"shape={X_shape}|tv={self.target_variance}|min={self.min_components}|max={self.max_components}|vt={self.variance_threshold}"
+        return hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+
+    def _load_cache_file(self, path):
+        with open(path, 'rb') as f:
+            obj = pickle.load(f)
+        return obj.get('features', None), obj
+
+    def _find_valid_cached_features(self, base: str, X_shape) -> tuple:
+        """Return (features, obj, path) for the newest valid cache matching X_shape and params."""
+        pattern = f"{base}_*.pkl"
+        candidates = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        for p in candidates:
+            try:
+                features, obj = self._load_cache_file(p)
+                if features is None:
+                    continue
+                orig_shape = obj.get('original_shape')
+                tv = obj.get('target_variance', 0)
+                if orig_shape == X_shape and tv >= self.target_variance * 0.95:
+                    return features, obj, p
+            except Exception:
+                continue
+        return None, None, None
+
+    def _cleanup_old_caches(self, base: str):
+        if self.keep_last is None or self.keep_last <= 0:
+            return
+        pattern = f"{base}_*.pkl"
+        files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        for p in files[self.keep_last:]:
+            try:
+                os.remove(p)
+            except Exception:
+                pass

@@ -1,6 +1,5 @@
-algorithm: impala  # or 'ppo'
+algorithm: sb3_ppo
 
-# Enhanced PPO Hyperparameters for Trading with Improved Architecture
 # Model/Transformer hyperparameters
 model:
   features_dim: 256
@@ -9,50 +8,50 @@ model:
     nhead: 8
     num_layers: 4
     dropout: 0.1
-ppo:
-  learning_rate: 0.0001     # Lower for complex transformer
-  n_steps: 8192             # Larger rollouts for better exploration
-  batch_size: 512           # Large batches for stable transformer training
-  n_epochs: 20              # More epochs due to complex architecture
-  gamma: 0.999              # Higher discount for long-term trading patterns
-  gae_lambda: 0.98          # High GAE for proper advantage estimation
-  clip_range: 0.1           # Conservative clipping for stable training
-  clip_range_vf: 0.2        # Value function clipping
-  ent_coef: 0.001           # Lower entropy for focused exploration
-  max_grad_norm: 1.0        # Higher gradient norm for transformer
-  vf_coef: 0.8              # Higher value function coefficient
-  normalize_advantage: true # Important for transformer training
 
-# Enhanced Environment Configuration with Realistic Market Simulation
+# Environment Configuration
 env:
   symbols: ["EURUSD"]
   timeframes: [15]
-  window_size: 100          # Longer window for transformer attention
-  max_leverage: 2.0
-  
-  # Enhanced feature engineering
-  target_variance: 0.95     # Higher variance retention
-  min_components: 20        # More components for complex patterns
-  max_components: 50        # Allow more features if needed
-  
-  # Realistic market simulation
-  enable_realistic_execution: true
-  base_spread_bps: 0.8      # Realistic EURUSD spread
-  slippage_factor: 0.15     # Moderate slippage
-  liquidity_impact: 0.08    # Volume impact
-  
-  # Enhanced reward parameters
-  reward_scaling: 1.5
-  min_reward: -15.0
-  max_reward: 15.0
-  survival_bonus: 0.01
-  leverage_penalty: 0.05
-  trade_reward_multiplier: 2.5
-  risk_adjusted_reward: true
-  drawdown_penalty: 0.3
-  early_close_bonus: 0.15
-  diversification_bonus: 0.08
-  volatility_penalty: 0.08
-  position_size_penalty: 0.03
-  min_tp_sl_ratio: 2.5      # Higher risk-reward ratio
-  atr_multiplier: 1.8       # Dynamic stops
+  window_size: 100
+  reward_scaling: 2.0
+  min_reward: -10.0
+  max_reward: 10.0
+  survival_bonus: 0.02
+  leverage_penalty: 0.02
+  trade_reward_multiplier: 2.0
+  drawdown_penalty: 0.2
+  early_close_bonus: 0.1
+  volatility_penalty: 0.05
+  position_size_penalty: 0.02
+  max_leverage: 20.0
+  min_tp_sl_ratio: 1.8
+  atr_multiplier: 2.2
+  use_cached_features: true
+  execution_cost_penalty_weight: 0.1
+  max_daily_drawdown: 0.2
+
+# Stable-Baselines3 PPO hyperparameters
+sb3_ppo:
+  # parallel envs
+  n_envs: 1           # set >1 for vectorized envs
+  use_subproc: false  # true on Linux/macOS for SubprocVecEnv
+  # training
+  total_timesteps: 2000000
+  n_steps: 2048
+  batch_size: 256
+  n_epochs: 10
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  # checkpointing
+  checkpoint_every_steps: 200000
+  model_path: ppo_transformer_mtsim_final
+
+# Global stop criteria retained for compatibility with CLI wrappers
+stop:
+  timesteps_total: 2000000

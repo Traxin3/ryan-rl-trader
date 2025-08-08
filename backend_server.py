@@ -166,7 +166,6 @@ def get_config():
     config = load_config()
     if config:
         return jsonify({
-            'ppo': config.get('ppo', {}),
             'env': config.get('env', {})
         })
     return jsonify({'error': 'Config not found'}), 404
@@ -178,25 +177,12 @@ def update_config():
         data = request.json
         config_path = "config/config.yaml"
         
-        config_content = f"""# PPO Hyperparameters
-ppo:
-  learning_rate: {data['ppo']['learning_rate']}
-  n_steps: {data['ppo']['n_steps']}
-  batch_size: {data['ppo']['batch_size']}
-  n_epochs: {data['ppo']['n_epochs']}
-  gamma: {data['ppo']['gamma']}
-  gae_lambda: {data['ppo']['gae_lambda']}
-  clip_range: {data['ppo']['clip_range']}
-  clip_range_vf: {data['ppo'].get('clip_range_vf', 0.1)}
-  ent_coef: {data['ppo']['ent_coef']}
-  max_grad_norm: {data['ppo']['max_grad_norm']}
-  vf_coef: {data['ppo']['vf_coef']}
+        config_content = f"""# Trading Environment Configuration
 
 env:
   symbols: {data['env']['symbols']}
   timeframes: {data['env']['timeframes']}
   window_size: {data['env']['window_size']}
-  max_leverage: {data['env']['max_leverage']}
   reward_scaling: {data['env'].get('reward_scaling', 1.0)}
   risk_adjusted_reward: {data['env'].get('risk_adjusted_reward', True)}
 """
@@ -314,9 +300,100 @@ def get_system_status():
         'metrics': get_system_metrics()
     })
 
+@app.route('/api/system/config', methods=['GET'])
+def get_system_config():
+    """Get system configuration"""
+    try:
+        with open('config/config.yaml', 'r') as f:
+            cfg = yaml.safe_load(f)
+        return jsonify({
+            'model': cfg.get('model', {}),
+            'env': cfg.get('env', {}),
+            'sb3_ppo': cfg.get('sb3_ppo', {}),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/system/config', methods=['POST'])
+def update_system_config():
+    """Update system configuration"""
+    data = request.json
+    try:
+        sb3 = data.get('sb3_ppo')
+        if sb3 is None and 'impala' in data:
+            imp = data['impala']
+            sb3 = {
+                'total_timesteps': imp.get('total_timesteps', 2_000_000),
+                'n_steps': imp.get('rollout_fragment_length', 2048),
+                'batch_size': imp.get('minibatch_size', imp.get('batch_size', 256)),
+                'n_epochs': 10,
+                'learning_rate': imp.get('learning_rate', 3e-4),
+                'gamma': 0.99,
+                'gae_lambda': 0.95,
+                'clip_range': 0.2,
+                'ent_coef': 0.0,
+                'vf_coef': 0.5,
+                'max_grad_norm': 0.5,
+                'n_envs': max(1, int(imp.get('num_rollout_workers', 1))),
+                'use_subproc': False,
+                'checkpoint_every_steps': 200000,
+                'model_path': 'ppo_transformer_mtsim_final',
+            }
+        with open('config/config.yaml', 'w') as f:
+            config_content = f"""algorithm: sb3_ppo
+
+model:
+  features_dim: {data['model']['features_dim']}
+  transformer:
+    d_model: {data['model']['transformer']['d_model']}
+    nhead: {data['model']['transformer']['nhead']}
+    num_layers: {data['model']['transformer']['num_layers']}
+    dropout: {data['model']['transformer']['dropout']}
+
+env:
+  symbols: {data['env']['symbols']}
+  timeframes: {data['env']['timeframes']}
+  window_size: {data['env']['window_size']}
+  reward_scaling: {data['env']['reward_scaling']}
+  min_reward: {data['env']['min_reward']}
+  max_reward: {data['env']['max_reward']}
+  survival_bonus: {data['env']['survival_bonus']}
+  leverage_penalty: {data['env']['leverage_penalty']}
+  trade_reward_multiplier: {data['env']['trade_reward_multiplier']}
+  drawdown_penalty: {data['env']['drawdown_penalty']}
+  early_close_bonus: {data['env']['early_close_bonus']}
+  volatility_penalty: {data['env']['volatility_penalty']}
+  position_size_penalty: {data['env']['position_size_penalty']}
+  max_leverage: {data['env']['max_leverage']}
+  min_tp_sl_ratio: {data['env']['min_tp_sl_ratio']}
+  atr_multiplier: {data['env']['atr_multiplier']}
+  use_cached_features: {str(data['env']['use_cached_features']).lower()}
+
+sb3_ppo:
+  n_envs: {sb3['n_envs']}
+  use_subproc: {str(sb3['use_subproc']).lower()}
+  total_timesteps: {sb3['total_timesteps']}
+  n_steps: {sb3['n_steps']}
+  batch_size: {sb3['batch_size']}
+  n_epochs: {sb3['n_epochs']}
+  learning_rate: {sb3['learning_rate']}
+  gamma: {sb3['gamma']}
+  gae_lambda: {sb3['gae_lambda']}
+  clip_range: {sb3['clip_range']}
+  ent_coef: {sb3['ent_coef']}
+  vf_coef: {sb3['vf_coef']}
+  max_grad_norm: {sb3['max_grad_norm']}
+  checkpoint_every_steps: {sb3['checkpoint_every_steps']}
+  model_path: {sb3['model_path']}
+"""
+            f.write(config_content)
+        return jsonify({'status': 'updated'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("🚀 Starting RL Trading Backend Server...")
     print("📊 API available at http://localhost:5000")
     print("🔄 Press Ctrl+C to stop the server")
     
-    app.run(host='0.0.0.0', port=5000, debug=False) 
+    app.run(host='0.0.0.0', port=5000, debug=False)

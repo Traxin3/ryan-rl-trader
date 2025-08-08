@@ -1,4 +1,3 @@
-
 from typing import Any
 from enum import Enum
 from datetime import datetime
@@ -38,26 +37,52 @@ class Timeframe(Enum):
     MN1 = 1  | 0xC000  # mt5.TIMEFRAME_MN1
 
 
+_SOFT_FALLBACK = True  # allow running without MT5 (training/backtest environments)
+
+
 def initialize() -> bool:
-    _check_mt5_available()
+    if not MT5_AVAILABLE:
+        if _SOFT_FALLBACK:
+            return True
+        _raise_mt5_unavailable()
     return mt5.initialize()
 
 
 def shutdown() -> None:
-    _check_mt5_available()
+    if not MT5_AVAILABLE:
+        if _SOFT_FALLBACK:
+            return None
+        _raise_mt5_unavailable()
     mt5.shutdown()
 
 
 def copy_rates_range(symbol: str, timeframe: Timeframe, date_from: datetime, date_to: datetime) -> np.ndarray:
-    _check_mt5_available()
+    if not MT5_AVAILABLE:
+        if _SOFT_FALLBACK:
+            return np.empty((0,), dtype=[('time', 'i8'), ('open', 'f8'), ('high', 'f8'), ('low', 'f8'), ('close', 'f8'), ('tick_volume', 'i8'), ('spread', 'i4'), ('real_volume', 'i8')])
+        _raise_mt5_unavailable()
     return mt5.copy_rates_range(symbol, timeframe.value, date_from, date_to)
 
 
 def symbol_info(symbol: str) -> Any:
-    _check_mt5_available()
+    if not MT5_AVAILABLE:
+        if _SOFT_FALLBACK:
+            class _MockInfo:
+                def __init__(self, name):
+                    self.name = name
+                    self.trade_contract_size = 100000
+                    self.margin_initial = 0.0
+                    self.margin_maintenance = 0.0
+                    self.trade_tick_value = 1.0
+                    self.trade_tick_size = 0.0001
+                    self.trade_mode = 0
+                    self.spread = 10
+                    self.point = 0.0001
+                    self.digits = 5
+            return _MockInfo(symbol)
+        _raise_mt5_unavailable()
     return mt5.symbol_info(symbol)
 
 
-def _check_mt5_available() -> None:
-    if not MT5_AVAILABLE:
-        raise OSError("MetaTrader5 is not available on your platform.")
+def _raise_mt5_unavailable() -> None:
+    raise OSError("MetaTrader5 is not available on your platform.")

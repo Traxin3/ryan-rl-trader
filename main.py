@@ -7,20 +7,30 @@ import sys
 import json
 import time
 import threading
-import config
 from datetime import datetime
 from pathlib import Path
-from ray import tune
-from model.algorithms import get_algorithm_class
-from ray.rllib.env.env_context import EnvContext
-from ray.rllib.env import PettingZooEnv
-from ray.tune.registry import register_env
-from ray.rllib.models import ModelCatalog
-from model.ppo_model import TransformerRLlibModel
 from gym_mtsim.envs.mt_env import MtEnv
 import warnings
 
 warnings.filterwarnings('ignore')
+
+
+def set_global_seeds(seed: int = 42):
+    try:
+        import random
+        import numpy as np
+        random.seed(seed)
+        np.random.seed(seed)
+        try:
+            import torch
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        except Exception:
+            pass
+        os.environ['PYTHONHASHSEED'] = str(seed)
+    except Exception:
+        pass
 
 def colorize_performance(value, threshold_good=0.05, threshold_bad=-0.05):
     """Add color to performance metrics based on value"""
@@ -371,48 +381,108 @@ def start_gui_mode():
         os.chdir(original_dir)
         print("💡 Try running manually: cd ryan-dash && npm run dev")
 
-def env_creator(env_config: dict):
-    config = env_config.get("config", {})
-    return MtEnv(**config)
 
 def run_training(config):
     print("\n" + "="*50)
-    print("🏋️ Starting Training Process (Ray RLlib)")
+    print("🏋️ Starting Training Process (Stable-Baselines3 PPO)")
     print("="*50)
     try:
-        register_env("TradingEnv", lambda cfg: MtEnv(**cfg))
-        ModelCatalog.register_custom_model("transformer_trading_model", TransformerRLlibModel)
+        import inspect
+        def filter_env_config(cfg):
+            valid_args = inspect.signature(MtEnv.__init__).parameters
+            return {k: v for k, v in cfg.items() if k in valid_args}
 
-        algo_name = config.get("algorithm", "impala")
-        get_algo_config = get_algorithm_class(algo_name)
+        seed = int(config.get('seed', 42))
+        set_global_seeds(seed)
 
-        model_config = {
-            "custom_model": "transformer_trading_model",
-            "custom_model_config": {
-                "features_dim": config.get("model", {}).get("features_dim", 256),
-                "transformer": config.get("model", {}).get("transformer", {})
-            },
-        }
+        try:
+            import torch
+            device = 'cuda' if torch.cuda.is_available() and torch.cuda.device_count() > 0 else 'cpu'
+        except Exception:
+            device = 'cpu'
 
-        algo_config = get_algo_config(
-            env_config=config["env"],
-            model_config=model_config,
-            ppo_config=config["ppo"]
+        algo_key = config.get('algorithm', 'sb3_ppo').lower()
+        if algo_key not in ('sb3_ppo', 'ppo'):
+            algo_key = 'sb3_ppo'
+        config.setdefault(algo_key, {})
+
+        env_config = config["env"]
+        symbols = env_config.get('symbols', ['EURUSD'])
+        timeframes = env_config.get('timeframes', [15])
+        base_cache = f"feature_cache_{'_'.join(symbols)}_{'_'.join(map(str, timeframes))}.pkl"
+        try:
+            import glob
+            base_no_ext, _ = os.path.splitext(base_cache)
+            matches = glob.glob(f"{base_no_ext}_*.pkl")
+        except Exception:
+            matches = []
+
+        if matches:
+            print(f"✅ Found cached features: {os.path.basename(matches[0])}")
+            print("🚀 Skipping feature engineering, using cached features directly!")
+            config["env"]["use_cached_features"] = True
+        else:
+            print("\n🔬 Running feature engineering and caching features (one-time)...")
+            pre_cache_env_config = config["env"].copy()
+            pre_cache_env_config["use_cached_features"] = False
+            MtEnv(**filter_env_config(pre_cache_env_config))
+            print("✅ Feature engineering and caching complete.")
+            config["env"]["use_cached_features"] = True
+
+        from model.ppo import make_vec_envs, build_policy_kwargs
+        from stable_baselines3 import PPO
+
+        sb3_cfg = config.get(algo_key, {})
+        n_envs = int(sb3_cfg.get('n_envs', 1))
+        use_subproc = bool(sb3_cfg.get('use_subproc', False))
+        env = make_vec_envs(config['env'], n_envs=n_envs, use_subproc=use_subproc)
+
+        policy_kwargs = build_policy_kwargs(config.get('model', {}))
+
+        total_timesteps = int(sb3_cfg.get('total_timesteps', 1_000_000))
+        n_steps = int(sb3_cfg.get('n_steps', 2048))
+        batch_size = int(sb3_cfg.get('batch_size', 256))
+        n_epochs = int(sb3_cfg.get('n_epochs', 10))
+        learning_rate = float(sb3_cfg.get('learning_rate', 3e-4))
+        gamma = float(sb3_cfg.get('gamma', 0.99))
+        gae_lambda = float(sb3_cfg.get('gae_lambda', 0.95))
+        clip_range = float(sb3_cfg.get('clip_range', 0.2))
+        ent_coef = float(sb3_cfg.get('ent_coef', 0.0))
+        vf_coef = float(sb3_cfg.get('vf_coef', 0.5))
+        max_grad_norm = float(sb3_cfg.get('max_grad_norm', 0.5))
+
+        tensorboard_log = os.path.abspath('./tensorboard_logs')
+        os.makedirs(tensorboard_log, exist_ok=True)
+
+        print("\n🏃 Starting SB3 PPO training...")
+        model = PPO(
+            policy='MultiInputPolicy',
+            env=env,
+            verbose=1,
+            seed=seed,
+            device=device,
+            tensorboard_log=tensorboard_log,
+            policy_kwargs=policy_kwargs,
+            n_steps=n_steps,
+            batch_size=batch_size,
+            n_epochs=n_epochs,
+            learning_rate=learning_rate,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            clip_range=clip_range,
+            ent_coef=ent_coef,
+            vf_coef=vf_coef,
+            max_grad_norm=max_grad_norm,
         )
 
-        print("\n🏃 Starting Ray Tune training...")
-        analysis = tune.run(
-            algo_name.upper(),
-            config=algo_config.to_dict(),
-            stop={"training_iteration": 10},
-            local_dir="./ray_results",
-            checkpoint_at_end=True,
-        )
-        print("\n✅ Training completed. Results in ./ray_results")
+        model.learn(total_timesteps=total_timesteps, progress_bar=True)
+
+        save_name = sb3_cfg.get('model_path', 'ppo_transformer_mtsim_final')
+        model.save(save_name)
+        print(f"\n✅ Training completed. Model saved to {os.path.abspath(save_name + '.zip')}")
     except Exception as e:
         print("\n❌ Training Failed:")
         print(f"Error: {str(e)}")
-        print("\n💡 If you use custom environment loops, always unpack as (obs, info) = env.reset() and (obs, reward, terminated, truncated, info) = env.step(action)")
         raise
 
 if __name__ == "__main__":
