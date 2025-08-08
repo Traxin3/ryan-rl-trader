@@ -469,9 +469,13 @@ def run_training(config):
             analysis = tune.run(
                 algo_name.upper(),
                 config=algo_config.to_dict(),
-                stop={"training_iteration": 10},
+                # Scale to long heavy-env runs using timesteps_total instead of iterations
+                stop={"timesteps_total": int(config.get("stop", {}).get("timesteps_total", 1_000_000))},
                 storage_path=storage_uri,
                 checkpoint_at_end=True,
+                checkpoint_freq=5,
+                keep_checkpoints_num=3,
+                reuse_actors=True,
             )
         except KeyboardInterrupt:
             print("\n🛑 Training interrupted by user. Attempting graceful shutdown...")

@@ -34,8 +34,22 @@ env:
 # IMPALA training hyperparameters
 impala:
   learning_rate: 0.0005
-  batch_size: 512
-  minibatch_size: 100
-  num_rollout_workers: 2
-  rollout_fragment_length: 50
+  # Rollout scaling for heavy envs
+  num_rollout_workers: 4           # increase with CPU cores
+  num_envs_per_worker: 2           # vectorize envs per worker
+  rollout_fragment_length: 200     # longer fragments amortize overhead
+  num_aggregation_workers: 1       # offload batch collation
+  # Batching
+  batch_size: 8192                 # learner batch size
+  minibatch_size: 1024             # per-epoch minibatch
+  learner_queue_size: 32
+  # Compression for large observations
+  compress_observations: true
+  # GPU
   num_gpus: 1
+  # Reporting cadence
+  min_time_s_per_iteration: 10
+
+# Global stop criteria (overrides iteration-based)
+stop:
+  timesteps_total: 2000000
