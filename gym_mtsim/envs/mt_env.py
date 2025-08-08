@@ -186,8 +186,14 @@ class MtEnv(gym.Env):
         self.simulator.tick(dt)
         self.portfolio_values.append(self.simulator.equity)
         if len(self.portfolio_values) > 2:
-            returns = np.diff(np.log(self.portfolio_values))
-            self.returns_volatility = np.std(returns) if len(returns) > 1 else 0.0
+            # Robust log-returns: clamp equity > 0, filter non-finite values
+            vals = np.asarray(self.portfolio_values, dtype=float)
+            vals = np.clip(vals, 1e-6, None)
+            log_vals = np.log(vals)
+            returns = np.diff(log_vals)
+            if returns.size:
+                returns = returns[np.isfinite(returns)]
+            self.returns_volatility = float(np.std(returns)) if returns.size > 1 else 0.0
         step_reward = self._calculate_reward(orders_info, closed_orders_info)
         for symbol, closed_orders in closed_orders_info.items():
             for order in closed_orders:
