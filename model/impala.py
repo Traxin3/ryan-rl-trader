@@ -41,7 +41,6 @@ def get_impala_config(env_config, model_config, training_config):
             _enable_learner_api=True,
             # Force policy path (if used) to pick our compat dist
             model={"custom_action_dist": "compat_diag_gaussian"},
-            compress_observations=compress_observations,
             learner_queue_size=learner_queue_size,
         )
         .resources(num_gpus=num_gpus)
@@ -50,6 +49,7 @@ def get_impala_config(env_config, model_config, training_config):
             rollout_fragment_length=rollout_fragment_length,
             num_envs_per_worker=num_envs_per_worker,
             num_aggregation_workers=num_aggregation_workers,
+            compress_observations=compress_observations,
         )
         .rl_module(
             _enable_rl_module_api=True,
