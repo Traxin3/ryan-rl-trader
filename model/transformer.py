@@ -103,9 +103,11 @@ class TransformerFeatureExtractor(nn.Module):
         
         self.d_model = d_model
         self.window_size = window_size
+        self.expected_feature_dim = int(feature_dim)
+        self._warned_feat_dim_mismatch = False
         
         self.input_proj = nn.Sequential(
-            nn.Linear(feature_dim, d_model // 2),
+            nn.Linear(self.expected_feature_dim, d_model // 2),
             nn.ReLU(),
             nn.Linear(d_model // 2, d_model),
             nn.LayerNorm(d_model)
@@ -187,7 +189,23 @@ class TransformerFeatureExtractor(nn.Module):
         else:
             raise ValueError(f"Unsupported tensor dimension: {x.dim()}. Expected 1D, 2D, or 3D tensor.")
         
-        batch_size = x.shape[0]
+        # Harmonize runtime feature dim with expected feature dim by pad or trim
+        if x.size(-1) != self.expected_feature_dim:
+            diff = x.size(-1) - self.expected_feature_dim
+            if not self._warned_feat_dim_mismatch:
+                try:
+                    print(f"[TransformerFeatureExtractor] Warning: feature dim mismatch runtime={x.size(-1)} expected={self.expected_feature_dim}. {'Trimming' if diff>0 else 'Padding'} to match.")
+                except Exception:
+                    pass
+                self._warned_feat_dim_mismatch = True
+            if diff > 0:
+                # Trim extra features
+                x = x[..., :self.expected_feature_dim]
+            else:
+                # Pad missing features with zeros
+                pad_width = -diff
+                pad = x.new_zeros(x.size(0), x.size(1), pad_width)
+                x = torch.cat([x, pad], dim=-1)
         
         x = self.input_proj(x)
         
