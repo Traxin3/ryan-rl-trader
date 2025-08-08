@@ -319,7 +319,6 @@ def update_system_config():
     """Update system configuration"""
     data = request.json
     try:
-        # Prefer SB3 PPO section if provided; else map legacy IMPALA fields
         sb3 = data.get('sb3_ppo')
         if sb3 is None and 'impala' in data:
             imp = data['impala']

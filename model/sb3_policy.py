@@ -27,7 +27,6 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
         transformer_config = transformer_config or {}
         d_model = transformer_config.get('d_model', features_dim)
 
-        # Base transformer on price/features + account metrics
         self.transformer = TransformerFeatureExtractor(observation_space, config={
             'd_model': d_model,
             'nhead': transformer_config.get('nhead', 8),
@@ -36,7 +35,6 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
             'scales': transformer_config.get('scales', [1, 2, 4]),
         })
 
-        # Optional liquidity branch: temporal pooling + MLP -> d_model
         self.use_liquidity = isinstance(observation_space, spaces.Dict) and 'liquidity' in observation_space.spaces
         if self.use_liquidity:
             liq_space = observation_space.spaces['liquidity']
@@ -51,7 +49,6 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
         else:
             self.liquidity_mlp = None
 
-        # Optional orders branch: simple MLP -> d_model
         self.use_orders = isinstance(observation_space, spaces.Dict) and 'orders' in observation_space.spaces
         if self.use_orders:
             ord_space = observation_space.spaces['orders']
@@ -66,7 +63,6 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
         else:
             self.orders_mlp = None
 
-        # Fusion projection to requested SB3 features_dim
         concat_dim = d_model
         if self.use_liquidity:
             concat_dim += d_model
@@ -80,17 +76,14 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
         self._features_dim = features_dim
 
     def forward(self, observations):
-        # Ensure float32 tensors
         if isinstance(observations, dict):
             obs = {k: v.float() for k, v in observations.items()}
         else:
             obs = observations.float()
 
-        # Base transformer features (sequence + account metrics)
         x = self.transformer(obs)
         feats = [x]
 
-        # Liquidity: temporal mean+max pooling, then MLP
         if self.use_liquidity and 'liquidity' in obs:
             liq = obs['liquidity']  # [B, T, L] or [T, L]
             if liq.dim() == 2:
@@ -100,7 +93,6 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
             liq_vec = torch.cat([mean_pool, max_pool], dim=-1)
             feats.append(self.liquidity_mlp(liq_vec))
 
-        # Orders: simple MLP on flat vector
         if self.use_orders and 'orders' in obs:
             ords = obs['orders']
             if ords.dim() > 2:

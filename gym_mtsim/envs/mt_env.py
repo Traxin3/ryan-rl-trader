@@ -186,7 +186,6 @@ class MtEnv(gym.Env):
         self.simulator.tick(dt)
         self.portfolio_values.append(self.simulator.equity)
         if len(self.portfolio_values) > 2:
-            # Robust log-returns: clamp equity > 0, filter non-finite values
             vals = np.asarray(self.portfolio_values, dtype=float)
             vals = np.clip(vals, 1e-6, None)
             log_vals = np.log(vals)
@@ -270,7 +269,6 @@ class MtEnv(gym.Env):
                 trade_duration = order.get('holding_time', 1.0)  # in hours
                 if trade_duration > 0:
                     try:
-                        # Clamp ROI to avoid log1p domain errors (roi > -1)
                         safe_roi = float(np.clip(roi, -0.999999, None))
                         exponent = np.log1p(safe_roi) * (24*365/max(trade_duration, 1e-6))
                         exponent = np.clip(exponent, -700, 700)
@@ -847,7 +845,6 @@ class MtEnv(gym.Env):
             close_orders_logit = symbol_action[:self.symbol_max_orders] * 5
             order_kind_logit = symbol_action[self.symbol_max_orders] * 5  # market vs limit
             tif_logit = symbol_action[self.symbol_max_orders + 1] * 5      # IOC vs FOK
-            # Signed limit offset in [-1, 1] scaled to bps; simulator handles tick quantization
             limit_offset_norm = symbol_action[self.symbol_max_orders + 2]
             hold_logit = symbol_action[self.symbol_max_orders + 3] * 5
             volume_signal = symbol_action[self.symbol_max_orders + 4]
@@ -894,7 +891,6 @@ class MtEnv(gym.Env):
                 'error': '',
             }
             if not hold and orders_capacity > 0:
-                # Skip if no feasible volume after constraints
                 if modified_volume <= 0:
                     orders_info[symbol]['error'] = 'no_volume'
                     continue
@@ -912,7 +908,6 @@ class MtEnv(gym.Env):
                 market_order = True if order_kind_prob >= 0.5 else False
                 tif = 'IOC' if tif_prob >= 0.5 else 'FOK'
                 max_offset_bps = 5.0
-                # Allow negative (passive) or positive (aggressive) signed offsets
                 limit_offset_bps = float(max_offset_bps * float(limit_offset_norm))
                 try:
                     order = self.simulator.create_order(
@@ -947,21 +942,16 @@ class MtEnv(gym.Env):
             vol_max = float(si.volume_max)
             step = float(si.volume_step) if float(si.volume_step) > 0 else vol_min
         except Exception:
-            # Fallback sensible defaults
             vol_min, vol_max, step = 0.01, 100.0, 0.01
 
         abs_sig = float(abs(volume_signal))
-        # Dead-zone: treat small signals as no-trade
         if abs_sig < 0.05:
             return 0.0
 
-        # Map signal to [vol_min, vol_max]
         raw_vol = vol_min + abs_sig * (vol_max - vol_min)
 
-        # Enforce leverage cap by scaling down if needed
         try:
             est_margin = self._estimate_margin(symbol, raw_vol)
-            # Max extra margin allowed
             margin_cap = max(0.0, self.max_leverage * (self.simulator.balance + 1e-6) - self.simulator.margin)
             if est_margin > margin_cap and est_margin > 0:
                 scale = margin_cap / est_margin
@@ -969,13 +959,11 @@ class MtEnv(gym.Env):
         except Exception:
             pass
 
-        # Quantize to volume_step (floor) and clip
         if step <= 0:
             step = vol_min
         quant_vol = float(np.floor(max(raw_vol, 0.0) / step) * step)
         quant_vol = float(min(max(quant_vol, 0.0), vol_max))
 
-        # If below instrument minimum after constraints, skip order
         if quant_vol < vol_min:
             return 0.0
         return quant_vol

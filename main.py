@@ -14,7 +14,6 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-# Global seeding for reproducibility
 
 def set_global_seeds(seed: int = 42):
     try:
@@ -382,7 +381,6 @@ def start_gui_mode():
         os.chdir(original_dir)
         print("💡 Try running manually: cd ryan-dash && npm run dev")
 
-# New: SB3 training pipeline replacing Ray/RLlib
 
 def run_training(config):
     print("\n" + "="*50)
@@ -431,7 +429,6 @@ def run_training(config):
             print("✅ Feature engineering and caching complete.")
             config["env"]["use_cached_features"] = True
 
-        # Build VecEnv and policy kwargs via helpers
         from model.ppo import make_vec_envs, build_policy_kwargs
         from stable_baselines3 import PPO
 
@@ -442,7 +439,6 @@ def run_training(config):
 
         policy_kwargs = build_policy_kwargs(config.get('model', {}))
 
-        # Hyperparams strictly from config
         total_timesteps = int(sb3_cfg.get('total_timesteps', 1_000_000))
         n_steps = int(sb3_cfg.get('n_steps', 2048))
         batch_size = int(sb3_cfg.get('batch_size', 256))
@@ -481,7 +477,6 @@ def run_training(config):
 
         model.learn(total_timesteps=total_timesteps, progress_bar=True)
 
-        # Save final model path from config
         save_name = sb3_cfg.get('model_path', 'ppo_transformer_mtsim_final')
         model.save(save_name)
         print(f"\n✅ Training completed. Model saved to {os.path.abspath(save_name + '.zip')}")

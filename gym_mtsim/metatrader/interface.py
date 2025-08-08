@@ -59,7 +59,6 @@ def shutdown() -> None:
 def copy_rates_range(symbol: str, timeframe: Timeframe, date_from: datetime, date_to: datetime) -> np.ndarray:
     if not MT5_AVAILABLE:
         if _SOFT_FALLBACK:
-            # Return an empty array with MT5-like dtype to avoid crashes in callers
             return np.empty((0,), dtype=[('time', 'i8'), ('open', 'f8'), ('high', 'f8'), ('low', 'f8'), ('close', 'f8'), ('tick_volume', 'i8'), ('spread', 'i4'), ('real_volume', 'i8')])
         _raise_mt5_unavailable()
     return mt5.copy_rates_range(symbol, timeframe.value, date_from, date_to)

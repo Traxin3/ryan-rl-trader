@@ -9,14 +9,12 @@ def get_impala_config(env_config, model_config, training_config):
       - training_config: dict of hyperparams (lr, batch sizes, etc.)
     """
     from model.transformer_rl_module import TransformerRLModule
-    # Ensure our compat dist is registered (used by TorchPolicy paths if needed)
     try:
         from model.custom_dists import register_custom_action_dists
         register_custom_action_dists()
     except Exception:
         pass
 
-    # Extract scaling/tuning knobs with sensible defaults for heavy envs
     num_rollout_workers = training_config.get("num_rollout_workers", 2)
     rollout_fragment_length = training_config.get("rollout_fragment_length", 50)
     num_envs_per_worker = training_config.get("num_envs_per_worker", 1)
@@ -26,7 +24,6 @@ def get_impala_config(env_config, model_config, training_config):
 
     train_batch_size = training_config.get("batch_size", 512)
     lr = training_config.get("learning_rate", 5e-4)
-    # Accept 'auto' or int; if int, enforce IMPALA constraints
     raw_minibatch = training_config.get("minibatch_size", "auto")
     if isinstance(raw_minibatch, str) and raw_minibatch != "auto":
         try:
@@ -35,7 +32,6 @@ def get_impala_config(env_config, model_config, training_config):
             raw_minibatch = "auto"
     if isinstance(raw_minibatch, int):
         if raw_minibatch % rollout_fragment_length != 0 or raw_minibatch > train_batch_size:
-            # Snap down to the largest valid multiple <= train_batch_size, at least one fragment
             max_mb = max(rollout_fragment_length, (train_batch_size // rollout_fragment_length) * rollout_fragment_length)
             minibatch_size = max_mb
         else:
@@ -43,7 +39,6 @@ def get_impala_config(env_config, model_config, training_config):
     else:
         minibatch_size = "auto"
 
-    # GPU resources only (CPU handled by defaults and main.py capping)
     num_gpus = training_config.get("num_gpus", 1)
 
     algo = (
@@ -55,7 +50,6 @@ def get_impala_config(env_config, model_config, training_config):
             lr=lr,
             minibatch_size=minibatch_size,
             _enable_learner_api=True,
-            # Force policy path (if used) to pick our compat dist
             model={"custom_action_dist": "compat_diag_gaussian"},
             learner_queue_size=learner_queue_size,
         )

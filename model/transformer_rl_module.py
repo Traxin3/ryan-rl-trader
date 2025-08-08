@@ -33,7 +33,6 @@ class TransformerRLModule(TorchRLModule):
                 nn.Dropout(0.1),
             )
 
-        # Orders context branch
         self.has_orders = hasattr(obs_space, 'spaces') and ('orders' in obs_space.spaces)
         self.orders_ctx_dim = 64
         if self.has_orders:
@@ -141,7 +140,6 @@ class TransformerRLModule(TorchRLModule):
             log_std = self.log_std_head(h)
             logits = torch.cat([mean, log_std], dim=-1)
         vf = self.value_head(features).squeeze(-1)
-        # Provide both keys to satisfy RLModule learner and legacy TorchPolicy postprocessing
         return {"action_dist_inputs": logits, "values": vf, "vf": vf, "vf_preds": vf}
 
    
@@ -152,12 +150,10 @@ class TransformerRLModule(TorchRLModule):
                 return TorchCategorical
             except Exception:
                 raise
-        # Continuous: prefer our compatibility wrapper that defines from_logits
         try:
             from model.custom_dists import CompatDiagGaussian
             return CompatDiagGaussian
         except Exception:
-            # Fallback: create a local wrapper if import fails
             try:
                 import numpy as np
                 from ray.rllib.models.torch.torch_action_dist import TorchDiagGaussian
@@ -176,7 +172,6 @@ class TransformerRLModule(TorchRLModule):
         return self.get_inference_action_dist_cls()
 
     def get_train_action_dist_cls(self):
-        # Use the same distribution class as inference/exploration for training
         return self.get_inference_action_dist_cls()
 
     @override(TorchRLModule)
