@@ -175,6 +175,10 @@ class TransformerRLModule(TorchRLModule):
     def get_exploration_action_dist_cls(self):
         return self.get_inference_action_dist_cls()
 
+    def get_train_action_dist_cls(self):
+        # Use the same distribution class as inference/exploration for training
+        return self.get_inference_action_dist_cls()
+
     @override(TorchRLModule)
     def forward_inference(self, batch):
         return self._forward_inference(batch)
