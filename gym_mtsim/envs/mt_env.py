@@ -47,7 +47,9 @@ class MtEnv(gym.Env):
         position_size_penalty: float = 0.01,
         min_tp_sl_ratio: float = 1.5,  # Minimum TP/SL ratio
         atr_multiplier: float = 2.0,     # ATR multiplier for SL
-        use_cached_features: bool = False  # Prefer cached features when available
+        use_cached_features: bool = False,  # Prefer cached features when available
+        execution_cost_penalty_weight: float = 0.10,
+        max_daily_drawdown: float = 0.20,
     ) -> None:
         self.symbols = symbols
         self.timeframes = timeframes
@@ -72,6 +74,8 @@ class MtEnv(gym.Env):
         self.min_tp_sl_ratio = min_tp_sl_ratio
         self.atr_multiplier = atr_multiplier
         self.use_cached_features = use_cached_features
+        self.execution_cost_penalty_weight = execution_cost_penalty_weight
+        self.max_daily_drawdown = max_daily_drawdown
 
         self.multiprocessing_pool = Pool(multiprocessing_processes) if multiprocessing_processes else None
         self.render_mode = render_mode
@@ -89,29 +93,46 @@ class MtEnv(gym.Env):
         self.prices = self._get_prices()
         
         self.optimized_feature_engine = OptimizedFeatureEngine(
-            target_variance=0.95,      # Higher variance retention
-            min_components=20,         # More components for patterns
-            max_components=50,         # Allow more if needed
-            variance_threshold=1e-6,   # Stricter variance threshold
-            cache_path=f"feature_cache_{'_'.join(self.symbols)}_{'_'.join(map(str, self.timeframes))}.pkl"
+            target_variance=0.95,
+            min_components=20,
+            max_components=50,
+            variance_threshold=1e-6,
+            cache_path=f"feature_cache_{'_'.join(self.symbols)}_{'_'.join(map(str, self.timeframes))}.pkl",
+            reuse_existing=True,
+            keep_last=2,
         )
-        
-        self.signal_features = self._process_data()
+
+        if self.use_cached_features:
+            try:
+                self.signal_features = self.optimized_feature_engine.load_cache()
+                print(f"✅ Loaded cached features with shape {self.signal_features.shape}")
+            except Exception as e:
+                raise RuntimeError(
+                    "Cached features not found. Please run a pre-cache step in the main process before launching workers."
+                )
+            self.liquidity_features = self._compute_liquidity_only()
+        else:
+            self.signal_features = self._process_data()
+            if not hasattr(self, 'liquidity_features') or self.liquidity_features is None:
+                self.liquidity_features = self._compute_liquidity_only()
         self.features_shape = (window_size, self.signal_features.shape[1])
+        self.liquidity_shape = (window_size, self.liquidity_features.shape[1])
         
         INF = 1e10
+        self._action_dims_per_symbol = self.symbol_max_orders + 5
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, dtype=np.float64,
-            shape=(len(self.symbols) * (self.symbol_max_orders + 2),))
+            shape=(len(self.symbols) * self._action_dims_per_symbol,))
         
         self.observation_space = spaces.Dict({
             'balance': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=np.float64),
             'equity': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=np.float64),
             'margin': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=np.float64),
             'features': spaces.Box(low=-INF, high=INF, shape=self.features_shape, dtype=np.float64),
+            'liquidity': spaces.Box(low=-INF, high=INF, shape=self.liquidity_shape, dtype=np.float64),
             'orders': spaces.Box(
                 low=-INF, high=INF, dtype=np.float64,
-                shape=(len(self.symbols), self.symbol_max_orders, 3)
+                shape=(len(self.symbols) * self.symbol_max_orders * 3,)  # Flatten to 1D to avoid vision network
             )
         })
         
@@ -120,7 +141,6 @@ class MtEnv(gym.Env):
         self._truncated = False
         self._current_tick = self._start_tick
         self.history = []
-        self.metrics_callback = TensorboardMetricsCallback()
         
         self.trade_history = []
         self.peak_equity = self.simulator.balance
@@ -172,11 +192,10 @@ class MtEnv(gym.Env):
         for symbol, closed_orders in closed_orders_info.items():
             for order in closed_orders:
                 self.trade_history.append(order)
-                self.metrics_callback.update_trade_metrics(order)
         self._update_position_times()
-        self.metrics_callback.update_position_times(self.simulator.orders)
         self._update_drawdown_metrics()
-        self.metrics_callback.update_drawdown(self.simulator.equity)
+        if self.max_drawdown > self.max_daily_drawdown:
+            terminated = True
         info = self._create_info(
             orders=orders_info,
             closed_orders=closed_orders_info,
@@ -212,122 +231,122 @@ class MtEnv(gym.Env):
             
         self.episode_reward_components['equity_change'].append(normalized_equity_change)
         
+        exec_entries = [e for e in getattr(self.simulator, 'execution_history', []) if e.get('time') == prev_info.get('current_time')]
+        is_penalty = 0.0
+        adverse_penalty = 0.0
+        participation_penalty = 0.0
+        queue_loss_penalty = 0.0
+        total_cost_bps = 0.0
+        for e in exec_entries:
+            market_px = float(e.get('market_price', 0.0))
+            exec_px = float(e.get('execution_price', market_px))
+            side = 1.0 if e.get('order_type') == 'Buy' else -1.0
+            is_bps = ((exec_px - market_px) / max(market_px, 1e-9)) * 10000.0 * side
+            is_penalty -= is_bps / 10000.0  # negative impact reduces reward
+            total_cost_bps += abs(float(e.get('slippage_bps', 0.0))) + float(e.get('spread_bps', 0.0))
+            adverse_penalty -= float(e.get('adverse_selection_bps', 0.0)) / 10000.0
+            pr = float(e.get('participation_rate', 0.0))
+            depth = float(e.get('book_total_depth', 1.0))
+            participation_penalty -= (pr ** 1.2) / (np.log1p(depth) + 1e-6)
+            fill_ratio = float(e.get('fill_ratio', 1.0))
+            queue_loss_penalty -= (1.0 - fill_ratio) * 0.01
+        execution_penalty = - self.execution_cost_penalty_weight * (total_cost_bps / 10000.0)
+        self.episode_reward_components['execution_cost_bps'].append(total_cost_bps)
+        self.episode_reward_components['is_penalty'].append(is_penalty)
+        self.episode_reward_components['adverse_penalty'].append(adverse_penalty)
+        self.episode_reward_components['participation_penalty'].append(participation_penalty)
+        self.episode_reward_components['queue_loss_penalty'].append(queue_loss_penalty)
+        
         trade_quality = 0
         for symbol, closed_orders in closed_orders_info.items():
             for order in closed_orders:
                 roi = order['profit'] / (order['margin'] + 1e-6)
                 trade_duration = order.get('holding_time', 1.0)  # in hours
-                
                 if trade_duration > 0:
                     try:
                         exponent = np.log1p(roi) * (24*365/trade_duration)
                         exponent = np.clip(exponent, -700, 700)
                         annualized_roi = np.exp(exponent) - 1
                     except:
-                        annualized_roi = 0  # Fallback for any numerical errors
+                        annualized_roi = 0
                 else:
                     annualized_roi = 0
-
                 if len(self.trade_history) > 5:
                     recent_returns = np.array([t['profit']/t['margin'] for t in self.trade_history[-10:] if 'margin' in t])
                     if len(recent_returns) > 1:
                         sharpe_like = roi / (np.std(recent_returns) + 1e-6)
                         trade_quality += 0.6 * np.sign(roi) * np.log1p(abs(sharpe_like))
-                
                 trade_quality += 0.4 * np.sign(roi) * np.log1p(abs(annualized_roi))
-                
                 if roi > 0.01 and 'holding_time' in order:
                     efficiency_bonus = self.early_close_bonus * min(1.0, roi / (order['holding_time'] + 1e-6))
                     trade_quality += efficiency_bonus
-        
         self.episode_reward_components['trade_quality'].append(trade_quality)
         
         margin_level = self.simulator.margin_level
-        
         if margin_level < 5.0:
-            risk_penalty = -1.0 * (5.0 - margin_level) ** 2  # Severe penalty
+            risk_penalty = -1.0 * (5.0 - margin_level) ** 2
         elif margin_level < 10.0:
-            risk_penalty = -0.3 * (10.0 - margin_level) ** 1.5  # Moderate penalty
+            risk_penalty = -0.3 * (10.0 - margin_level) ** 1.5
         else:
             risk_penalty = 0
-            
-        if self.max_drawdown > 0.15:  # > 15% drawdown
+        if self.max_drawdown > 0.15:
             drawdown_penalty = -2.0 * (self.max_drawdown - 0.15) ** 2
-        elif self.max_drawdown > 0.10:  # 10-15% drawdown
+        elif self.max_drawdown > 0.10:
             drawdown_penalty = -0.5 * (self.max_drawdown - 0.10) ** 2
-        elif self.max_drawdown > 0.05:  # 5-10% drawdown
+        elif self.max_drawdown > 0.05:
             drawdown_penalty = -0.1 * (self.max_drawdown - 0.05) ** 2
         else:
             drawdown_penalty = 0
-            
-        total_risk_penalty = risk_penalty + drawdown_penalty * self.drawdown_penalty
+        tail_penalty = 0.0
+        if len(self.portfolio_values) > 30:
+            rets = np.diff(self.portfolio_values) / (np.array(self.portfolio_values[:-1]) + 1e-6)
+            var_p = np.percentile(rets, 5)
+            cvar = np.mean(rets[rets <= var_p]) if np.any(rets <= var_p) else 0.0
+            tail_penalty = -abs(cvar) * 10.0
+        total_risk_penalty = risk_penalty + self.drawdown_penalty * drawdown_penalty + tail_penalty
         self.episode_reward_components['risk_penalty'].append(total_risk_penalty)
         
         open_positions = len(self.simulator.orders)
         position_bonus = 0.05 * min(open_positions, len(self.symbols))
-        
         unique_symbols = len({order.symbol for order in self.simulator.orders})
         diversification = self.diversification_bonus * unique_symbols / len(self.symbols)
         
         if len(self.history) >= 10:
             recent_prices = [h.get('close_price', h.get('equity', 0)) for h in self.history[-10:]]
             market_volatility = np.std(np.diff(recent_prices)) / (np.mean(recent_prices) + 1e-6)
-            
-            if market_volatility < 0.005:  # Low volatility
+            if market_volatility < 0.005:
                 regime_factor = 0.8
-            elif market_volatility > 0.02:  # High volatility
+            elif market_volatility > 0.02:
                 regime_factor = 1.2
             else:
                 regime_factor = 1.0
         else:
             regime_factor = 1.0
         
-        consistency_bonus = 0
-        if len(self.trade_history) >= 5:
-            recent_trades = self.trade_history[-5:]
-            profits = [t['profit'] for t in recent_trades]
-            
-            if all(p > 0 for p in profits):
-                consistency_bonus = 0.2 * np.mean(profits) / (self.simulator.equity + 1e-6)
-            elif all(p < 0 for p in profits):
-                consistency_bonus = -0.1 * abs(np.mean(profits)) / (self.simulator.equity + 1e-6)
-                
-        self.episode_reward_components['consistency_bonus'].append(consistency_bonus)
-        
-        drawdown_severity = min(self.max_drawdown / 0.20, 1.0)  # Normalize to 20% max
-        
-        if drawdown_severity > 0.5:  # High drawdown - focus on risk
-            weights = {
-                'equity_change': 0.2,
-                'trade_quality': 0.2,
-                'risk_penalty': 0.4,  # Emphasize risk control
-                'position_bonus': 0.05,
-                'diversification': 0.05,
-                'consistency_bonus': 0.1
-            }
-        else:  # Normal conditions
-            weights = {
-                'equity_change': 0.35,
-                'trade_quality': 0.3,
-                'risk_penalty': 0.15,
-                'position_bonus': 0.05,
-                'diversification': 0.05,
-                'consistency_bonus': 0.1
-            }
-        
+        weights = {
+            'equity_change': 0.25,
+            'trade_quality': 0.25,
+            'execution': 0.15,
+            'is': 0.10,
+            'adverse': 0.05,
+            'participation': 0.05,
+            'queue': 0.05,
+            'risk': 0.10
+        }
         total_reward = (
-            weights['equity_change'] * normalized_equity_change + 
-            weights['trade_quality'] * trade_quality * self.trade_reward_multiplier + 
-            weights['risk_penalty'] * total_risk_penalty + 
-            weights['position_bonus'] * position_bonus +
-            weights['diversification'] * diversification +
-            weights['consistency_bonus'] * consistency_bonus
+            weights['equity_change'] * normalized_equity_change +
+            weights['trade_quality'] * trade_quality * self.trade_reward_multiplier +
+            weights['execution'] * execution_penalty +
+            weights['is'] * is_penalty +
+            weights['adverse'] * adverse_penalty +
+            weights['participation'] * participation_penalty +
+            weights['queue'] * queue_loss_penalty +
+            weights['risk'] * total_risk_penalty
         ) * regime_factor
         
         survival = self.survival_bonus if not self._truncated else 0
         leverage = self.simulator.margin / (self.simulator.balance + 1e-6)
         leverage_penalty = -self.leverage_penalty * (max(leverage - 1, 0) ** 2)
-        
         total_reward += survival + leverage_penalty
         
         dynamic_max = self.max_reward * regime_factor
@@ -474,29 +493,105 @@ class MtEnv(gym.Env):
 
         sim = self.simulator
         enhanced_liquidity_feats = []
+        vpin_state: Dict[Tuple[str, int], Dict[str, Any]] = {}
+        for symbol in self.symbols:
+            for tf in self.timeframes:
+                vpin_state[(symbol, tf)] = {
+                    'prev_mid': None,
+                    'buy_vol': 0.0,
+                    'sell_vol': 0.0,
+                    'vpin_window': deque(maxlen=50),
+                }
         for idx, dt in enumerate(tqdm(dt_index, desc='Enhanced Liquidity Features')):
             row = []
             for symbol in self.symbols:
                 for tf in self.timeframes:
-                    dist_liq, liq_sweep, liq_buildup, ob_strength = sim.get_liquidity_features(symbol, tf, dt)
-                    sessions, mins_since_open, magic1, magic2 = sim.get_session_info(dt)
-                    hourly_liquidity = sim.market_impact_model.get_daily_liquidity_pattern(dt.hour) if hasattr(sim, 'market_impact_model') and sim.market_impact_model else 1.0
                     df = sim.symbols_data[(symbol, tf)]
                     nearest = sim.nearest_time(symbol, dt, tf)
                     current_idx = df.index.get_loc(nearest)
                     if current_idx >= 10:
                         recent_data = df.iloc[max(0, current_idx-10):current_idx+1]
-                        market_depth = 1.0 / (np.std(recent_data['Close'].values) + 1e-8)
                     else:
-                        market_depth = 1.0
+                        recent_data = df.iloc[:current_idx+1]
+                    recent_prices = recent_data['Close'].values
+                    current_price = float(recent_prices[-1]) if len(recent_prices) else float(df.iloc[current_idx]['Close'])
+
+                    if hasattr(sim, 'market_impact_model') and sim.market_impact_model:
+                        bid, ask = sim.market_impact_model.get_dynamic_spread(
+                            symbol, dt, recent_prices, current_price
+                        )
+                        mid = (bid + ask) / 2.0
+                        spread_bps = ((ask - bid) / max(current_price, 1e-9)) * 10000.0
+                        lob_metrics = sim.market_impact_model.get_lob_metrics(
+                            symbol, dt, recent_prices, current_price
+                        )
+                        total_depth = lob_metrics['total_depth']
+                        imbalance = lob_metrics['imbalance']
+                    else:
+                        mid = current_price
+                        spread_bps = 0.0
+                        total_depth = 1.0
+                        imbalance = 0.0
+
+                    vol_col = None
+                    for c in ['TickVolume', 'Tick_Volume', 'Volume', 'Real_Volume']:
+                        if c in df.columns:
+                            vol_col = c
+                            break
+                    volume_proxy = float(df.loc[nearest][vol_col]) if vol_col else max(1.0, total_depth)
+
+                    effective_spread_bps = 2.0 * abs(current_price - mid) / max(mid, 1e-9) * 10000.0
+
+                    if current_idx + 3 < len(df):
+                        future_close = float(df.iloc[current_idx + 3]['Close'])
+                        realized_spread_bps = 2.0 * (current_price - future_close) / max(mid, 1e-9) * 10000.0
+                    else:
+                        realized_spread_bps = 0.0
+
+                    prev_mid = vpin_state[(symbol, tf)]['prev_mid']
+                    if prev_mid is None:
+                        delta_mid = 0.0
+                    else:
+                        delta_mid = mid - prev_mid
+                    ofi_proxy = (delta_mid / max(prev_mid if prev_mid else mid, 1e-9)) * total_depth if prev_mid else 0.0
+                    footprint_delta = np.sign(delta_mid) * volume_proxy
+                    vpin_state[(symbol, tf)]['prev_mid'] = mid
+
+                    if delta_mid >= 0:
+                        vpin_state[(symbol, tf)]['buy_vol'] += volume_proxy
+                    else:
+                        vpin_state[(symbol, tf)]['sell_vol'] += volume_proxy
+                    b = vpin_state[(symbol, tf)]['buy_vol']
+                    s = vpin_state[(symbol, tf)]['sell_vol']
+                    vpin_inst = abs(b - s) / max(b + s, 1e-6)
+                    vpin_state[(symbol, tf)]['vpin_window'].append(vpin_inst)
+                    vpin_proxy = float(np.mean(vpin_state[(symbol, tf)]['vpin_window']))
+
+                    trade_count = float(df.loc[nearest][vol_col]) if vol_col else max(1.0, total_depth)
+                    bar_seconds = int(tf) * 60
+                    inter_trade_time = bar_seconds / max(trade_count, 1e-6)
+
+                    dist_liq, liq_sweep, liq_buildup, ob_strength = sim.get_liquidity_features(symbol, tf, dt)
+                    sessions, mins_since_open, magic1, magic2 = sim.get_session_info(dt)
+                    hourly_liquidity = sim.market_impact_model.get_daily_liquidity_pattern(dt.hour) if hasattr(sim, 'market_impact_model') and sim.market_impact_model else 1.0
+
+                    if current_idx >= 10:
+                        market_depth_proxy = 1.0 / (np.std(recent_prices) + 1e-8)
+                    else:
+                        market_depth_proxy = 1.0
+
                     row.extend([
+                        spread_bps, effective_spread_bps, realized_spread_bps,
+                        total_depth, imbalance, ofi_proxy, vpin_proxy, footprint_delta,
+                        trade_count, inter_trade_time,
                         dist_liq, liq_sweep, liq_buildup, ob_strength,
                         *sessions, mins_since_open / 1440.0,
                         magic1 / 144.0, magic2 / 89.0,
-                        hourly_liquidity, market_depth
+                        hourly_liquidity, market_depth_proxy
                     ])
             enhanced_liquidity_feats.append(row)
         enhanced_liquidity_feats = np.array(enhanced_liquidity_feats)
+        self.liquidity_features = enhanced_liquidity_feats
 
         hour = np.array([d.hour for d in dt_index])
         minute = np.array([d.minute for d in dt_index])
@@ -603,20 +698,110 @@ class MtEnv(gym.Env):
 
         return features_reduced
 
+    def _compute_liquidity_only(self) -> np.ndarray:
+        """Compute the liquidity-only feature block used as a separate observation branch."""
+        sim = self.simulator
+        dt_index = self.simulator.symbols_data[(self.symbols[0], self.timeframes[0])].reindex(self.time_points, method='ffill').index
+        from collections import deque
+        enhanced_liquidity_feats = []
+        vpin_state: Dict[Tuple[str, int], Dict[str, Any]] = {}
+        for symbol in self.symbols:
+            for tf in self.timeframes:
+                vpin_state[(symbol, tf)] = {
+                    'prev_mid': None,
+                    'buy_vol': 0.0,
+                    'sell_vol': 0.0,
+                    'vpin_window': deque(maxlen=50),
+                }
+        for dt in dt_index:
+            row = []
+            for symbol in self.symbols:
+                for tf in self.timeframes:
+                    df = sim.symbols_data[(symbol, tf)]
+                    nearest = sim.nearest_time(symbol, dt, tf)
+                    current_idx = df.index.get_loc(nearest)
+                    recent_data = df.iloc[max(0, current_idx-10):current_idx+1]
+                    recent_prices = recent_data['Close'].values
+                    current_price = float(recent_prices[-1]) if len(recent_prices) else float(df.iloc[current_idx]['Close'])
+                    if hasattr(sim, 'market_impact_model') and sim.market_impact_model:
+                        bid, ask = sim.market_impact_model.get_dynamic_spread(symbol, dt, recent_prices, current_price)
+                        mid = (bid + ask) / 2.0
+                        spread_bps = ((ask - bid) / max(current_price, 1e-9)) * 10000.0
+                        lob_metrics = sim.market_impact_model.get_lob_metrics(symbol, dt, recent_prices, current_price)
+                        total_depth = lob_metrics['total_depth']
+                        imbalance = lob_metrics['imbalance']
+                    else:
+                        mid = current_price
+                        spread_bps = 0.0
+                        total_depth = 1.0
+                        imbalance = 0.0
+                    vol_col = None
+                    for c in ['TickVolume', 'Tick_Volume', 'Volume', 'Real_Volume']:
+                        if c in df.columns:
+                            vol_col = c
+                            break
+                    volume_proxy = float(df.loc[nearest][vol_col]) if vol_col else max(1.0, total_depth)
+                    effective_spread_bps = 2.0 * abs(current_price - mid) / max(mid, 1e-9) * 10000.0
+                    if current_idx + 3 < len(df):
+                        future_close = float(df.iloc[current_idx + 3]['Close'])
+                        realized_spread_bps = 2.0 * (current_price - future_close) / max(mid, 1e-9) * 10000.0
+                    else:
+                        realized_spread_bps = 0.0
+                    prev_mid = vpin_state[(symbol, tf)]['prev_mid']
+                    delta_mid = 0.0 if prev_mid is None else (mid - prev_mid)
+                    ofi_proxy = (delta_mid / max(prev_mid if prev_mid else mid, 1e-9)) * total_depth if prev_mid else 0.0
+                    footprint_delta = np.sign(delta_mid) * volume_proxy
+                    vpin_state[(symbol, tf)]['prev_mid'] = mid
+                    if delta_mid >= 0:
+                        vpin_state[(symbol, tf)]['buy_vol'] += volume_proxy
+                    else:
+                        vpin_state[(symbol, tf)]['sell_vol'] += volume_proxy
+                    b = vpin_state[(symbol, tf)]['buy_vol']
+                    s = vpin_state[(symbol, tf)]['sell_vol']
+                    vpin_inst = abs(b - s) / max(b + s, 1e-6)
+                    vpin_state[(symbol, tf)]['vpin_window'].append(vpin_inst)
+                    vpin_proxy = float(np.mean(vpin_state[(symbol, tf)]['vpin_window']))
+                    trade_count = float(df.loc[nearest][vol_col]) if vol_col else max(1.0, total_depth)
+                    bar_seconds = int(tf) * 60
+                    inter_trade_time = bar_seconds / max(trade_count, 1e-6)
+                    dist_liq, liq_sweep, liq_buildup, ob_strength = sim.get_liquidity_features(symbol, tf, dt)
+                    sessions, mins_since_open, magic1, magic2 = sim.get_session_info(dt)
+                    hourly_liquidity = sim.market_impact_model.get_daily_liquidity_pattern(dt.hour) if hasattr(sim, 'market_impact_model') and sim.market_impact_model else 1.0
+                    if len(recent_prices) >= 2:
+                        market_depth_proxy = 1.0 / (np.std(recent_prices) + 1e-8)
+                    else:
+                        market_depth_proxy = 1.0
+                    row.extend([
+                        spread_bps, effective_spread_bps, realized_spread_bps,
+                        total_depth, imbalance, ofi_proxy, vpin_proxy, footprint_delta,
+                        trade_count, inter_trade_time,
+                        dist_liq, liq_sweep, liq_buildup, ob_strength,
+                        *sessions, mins_since_open / 1440.0,
+                        magic1 / 144.0, magic2 / 89.0,
+                        hourly_liquidity, market_depth_proxy
+                    ])
+            enhanced_liquidity_feats.append(row)
+        return np.array(enhanced_liquidity_feats)
+
     def _get_observation(self) -> Dict[str, np.ndarray]:
         features = self.signal_features[(self._current_tick-self.window_size+1):(self._current_tick+1)]
-
+        liquidity = self.liquidity_features[(self._current_tick-self.window_size+1):(self._current_tick+1)]
+        
         orders = np.zeros(self.observation_space['orders'].shape)
+        flat_index = 0
         for i, symbol in enumerate(self.symbols):
             symbol_orders = self.simulator.symbol_orders(symbol)
             for j, order in enumerate(symbol_orders):
-                orders[i, j] = [order.entry_price, order.volume, order.profit]
+                if j < self.symbol_max_orders:  # Ensure we don't exceed the limit
+                    orders[flat_index:flat_index+3] = [order.entry_price, order.volume, order.profit]
+                    flat_index += 3
 
         return {
             'balance': np.array([self.simulator.balance]),
             'equity': np.array([self.simulator.equity]),
             'margin': np.array([self.simulator.margin]),
             'features': features,
+            'liquidity': liquidity,
             'orders': orders,
         }
 
@@ -649,18 +834,24 @@ class MtEnv(gym.Env):
         
         orders_info = {}
         closed_orders_info = {symbol: [] for symbol in self.symbols}
-        k = self.symbol_max_orders + 2
+        k = self._action_dims_per_symbol
 
         for i, symbol in enumerate(self.symbols):
             symbol_action = action[k*i:k*(i+1)]
-            close_orders_logit = symbol_action[:-2] * 5
-            hold_logit = symbol_action[-2] * 5
-            volume = symbol_action[-1]
+            close_orders_logit = symbol_action[:self.symbol_max_orders] * 5
+            order_kind_logit = symbol_action[self.symbol_max_orders] * 5  # market vs limit
+            tif_logit = symbol_action[self.symbol_max_orders + 1] * 5      # IOC vs FOK
+            limit_offset_norm = symbol_action[self.symbol_max_orders + 2]  # [-1,1] -> [0, max_bps]
+            hold_logit = symbol_action[self.symbol_max_orders + 3] * 5
+            volume_signal = symbol_action[self.symbol_max_orders + 4]
 
             close_orders_probability = expit(close_orders_logit)
             hold_probability = expit(hold_logit)
+            order_kind_prob = expit(order_kind_logit)
+            tif_prob = expit(tif_logit)
+
             hold = bool(hold_probability > self.hold_threshold)
-            modified_volume = self._get_modified_volume(symbol, volume)
+            modified_volume = self._get_modified_volume(symbol, volume_signal)
 
             symbol_orders = self.simulator.symbol_orders(symbol)
             orders_to_close_index = np.where(
@@ -687,7 +878,7 @@ class MtEnv(gym.Env):
                 'symbol': symbol,
                 'hold_probability': hold_probability,
                 'hold': hold,
-                'volume': volume,
+                'volume': volume_signal,
                 'capacity': orders_capacity,
                 'order_type': None,
                 'modified_volume': modified_volume,
@@ -695,13 +886,29 @@ class MtEnv(gym.Env):
                 'margin': float('nan'),
                 'error': '',
             }
-
             if not hold and orders_capacity > 0:
-                order_type = OrderType.Buy if volume > 0 else OrderType.Sell
-                fee = self.fee if isinstance(self.fee, float) else self.fee(symbol)
-
                 try:
-                    order = self.simulator.create_order(order_type, symbol, modified_volume, fee)
+                    est_margin = self._estimate_margin(symbol, modified_volume)
+                    projected_margin = self.simulator.margin + est_margin
+                    projected_leverage = projected_margin / (self.simulator.balance + 1e-6)
+                except Exception:
+                    projected_leverage = np.inf
+                if projected_leverage > self.max_leverage:
+                    orders_info[symbol]['error'] = 'max_leverage_exceeded'
+                    continue
+                order_type = OrderType.Buy if volume_signal > 0 else OrderType.Sell
+                fee = self.fee if isinstance(self.fee, float) else self.fee(symbol)
+                market_order = True if order_kind_prob >= 0.5 else False
+                tif = 'IOC' if tif_prob >= 0.5 else 'FOK'
+                max_offset_bps = 5.0
+                limit_offset_bps = float(max_offset_bps * max(0.0, abs(limit_offset_norm)))
+                try:
+                    order = self.simulator.create_order(
+                        order_type, symbol, modified_volume, fee,
+                        market_order=market_order,
+                        limit_offset_bps=limit_offset_bps,
+                        tif=tif
+                    )
                     orders_info[symbol].update({
                         'order_id': order.id,
                         'order_type': order_type,
@@ -713,12 +920,14 @@ class MtEnv(gym.Env):
 
         return orders_info, closed_orders_info
 
-    def _get_modified_volume(self, symbol: str, volume: float) -> float:
+    def _estimate_margin(self, symbol: str, volume: float) -> float:
         si = self.simulator.symbols_info[symbol]
-        v = abs(volume)
-        v = np.clip(v, si.volume_min, si.volume_max)
-        v = round(v / si.volume_step) * si.volume_step
-        return v
+        price = float(self.simulator.price_at(symbol, self.simulator.current_time)['Close'])
+        v = abs(volume) * si.trade_contract_size
+        local_margin = (v * price) / self.simulator.leverage
+        local_margin *= si.margin_rate
+        unit_ratio = self.simulator._get_unit_ratio(symbol, self.simulator.current_time)
+        return local_margin * unit_ratio
 
     def render(self, mode: str = 'human', **kwargs: Any) -> Any:
         if mode == 'simple_figure':

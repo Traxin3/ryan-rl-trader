@@ -55,9 +55,9 @@ class MultiScaleAttention(nn.Module):
         return self.norm(fused + x)
 
 class TradingTransformerBlock(nn.Module):
-    def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1):
+    def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1, scales=None):
         super().__init__()
-        self.multi_scale_attn = MultiScaleAttention(d_model, nhead)
+        self.multi_scale_attn = MultiScaleAttention(d_model, nhead, scales=scales or [1, 2, 4])
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
@@ -80,7 +80,7 @@ class TradingTransformerBlock(nn.Module):
         return x
 
 class TransformerFeatureExtractor(nn.Module):
-    def __init__(self, observation_space: gym.spaces.Dict, config=None):
+    def __init__(self, observation_space, config=None):
         super().__init__()
         if config is None:
             config = {}
@@ -88,8 +88,19 @@ class TransformerFeatureExtractor(nn.Module):
         nhead = config.get('nhead', 8)
         num_layers = config.get('num_layers', 4)
         dropout = config.get('dropout', 0.1)
+        scales = config.get('scales', [1, 2, 4])
         
-        window_size, feature_dim = observation_space['features'].shape
+        if hasattr(observation_space, 'spaces') and 'features' in observation_space.spaces:
+            window_size, feature_dim = observation_space.spaces['features'].shape
+        elif hasattr(observation_space, 'shape') and len(observation_space.shape) == 2:
+            window_size, feature_dim = observation_space.shape
+        elif hasattr(observation_space, 'shape') and len(observation_space.shape) == 1:
+            total_features = observation_space.shape[0]
+            window_size = 50  # Default window size
+            feature_dim = total_features // window_size
+        else:
+            window_size, feature_dim = 50, 256
+        
         self.d_model = d_model
         self.window_size = window_size
         
@@ -103,7 +114,7 @@ class TransformerFeatureExtractor(nn.Module):
         self.pos_encoding = PositionalEncoding(d_model, window_size)
         
         self.transformer_blocks = nn.ModuleList([
-            TradingTransformerBlock(d_model, nhead, d_model * 4, dropout)
+            TradingTransformerBlock(d_model, nhead, d_model * 4, dropout, scales=scales)
             for _ in range(num_layers)
         ])
         
@@ -127,9 +138,55 @@ class TransformerFeatureExtractor(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, d_model)
         )
+        
+        self.final_proj = nn.Sequential(
+            nn.Linear(d_model + 64, d_model),  # sequence + market features
+            nn.ReLU(),
+            nn.Linear(d_model, d_model)
+        )
+        
+        self.sequence_only_proj = nn.Sequential(
+            nn.Linear(d_model, d_model),  # only sequence features
+            nn.ReLU(),
+            nn.Linear(d_model, d_model)
+        )
 
     def forward(self, obs):
-        x = obs['features']  # [batch, seq_len, features]
+        if isinstance(obs, dict) and 'features' in obs:
+            x = obs['features']
+        else:
+            x = obs
+        
+        if x.dim() == 2:
+            batch_size = x.shape[0]
+            total_features = x.shape[1]
+            
+            if total_features % self.window_size != 0:
+                target_size = (total_features // self.window_size + 1) * self.window_size
+                if total_features < target_size:
+                    padding = target_size - total_features
+                    x = F.pad(x, (0, padding))
+                    total_features = target_size
+                    
+            feature_dim = total_features // self.window_size
+            x = x.view(batch_size, self.window_size, feature_dim)
+        elif x.dim() == 1:
+            total_features = x.shape[0]
+            
+            if total_features % self.window_size != 0:
+                target_size = (total_features // self.window_size + 1) * self.window_size
+                if total_features < target_size:
+                    padding = target_size - total_features
+                    x = F.pad(x, (0, padding))
+                    total_features = target_size
+                    
+            feature_dim = total_features // self.window_size
+            x = x.view(1, self.window_size, feature_dim)
+        elif x.dim() == 3:
+            pass
+        else:
+            raise ValueError(f"Unsupported tensor dimension: {x.dim()}. Expected 1D, 2D, or 3D tensor.")
+        
         batch_size = x.shape[0]
         
         x = self.input_proj(x)
@@ -151,13 +208,16 @@ class TransformerFeatureExtractor(nn.Module):
         pooled = torch.cat([avg_pooled, max_pooled, attention_pooled], dim=1)
         sequence_features = self.output_proj(pooled)
         
-        market_state = torch.stack([
-            obs['balance'].squeeze(-1),
-            obs['equity'].squeeze(-1), 
-            obs['margin'].squeeze(-1)
-        ], dim=1)
-        market_features = self.market_context(market_state)
-        
-        final_features = torch.cat([sequence_features, market_features], dim=1)
+        if isinstance(obs, dict) and all(key in obs for key in ['balance', 'equity', 'margin']):
+            market_state = torch.stack([
+                obs['balance'].squeeze(-1) if obs['balance'].dim() > 1 else obs['balance'],
+                obs['equity'].squeeze(-1) if obs['equity'].dim() > 1 else obs['equity'],
+                obs['margin'].squeeze(-1) if obs['margin'].dim() > 1 else obs['margin']
+            ], dim=1)
+            market_features = self.market_context(market_state)
+            combined_features = torch.cat([sequence_features, market_features], dim=1)
+            final_features = self.final_proj(combined_features)
+        else:
+            final_features = self.sequence_only_proj(sequence_features)
         
         return final_features

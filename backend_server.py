@@ -166,7 +166,6 @@ def get_config():
     config = load_config()
     if config:
         return jsonify({
-            'ppo': config.get('ppo', {}),
             'env': config.get('env', {})
         })
     return jsonify({'error': 'Config not found'}), 404
@@ -178,25 +177,12 @@ def update_config():
         data = request.json
         config_path = "config/config.yaml"
         
-        config_content = f"""# PPO Hyperparameters
-ppo:
-  learning_rate: {data['ppo']['learning_rate']}
-  n_steps: {data['ppo']['n_steps']}
-  batch_size: {data['ppo']['batch_size']}
-  n_epochs: {data['ppo']['n_epochs']}
-  gamma: {data['ppo']['gamma']}
-  gae_lambda: {data['ppo']['gae_lambda']}
-  clip_range: {data['ppo']['clip_range']}
-  clip_range_vf: {data['ppo'].get('clip_range_vf', 0.1)}
-  ent_coef: {data['ppo']['ent_coef']}
-  max_grad_norm: {data['ppo']['max_grad_norm']}
-  vf_coef: {data['ppo']['vf_coef']}
+        config_content = f"""# Trading Environment Configuration
 
 env:
   symbols: {data['env']['symbols']}
   timeframes: {data['env']['timeframes']}
   window_size: {data['env']['window_size']}
-  max_leverage: {data['env']['max_leverage']}
   reward_scaling: {data['env'].get('reward_scaling', 1.0)}
   risk_adjusted_reward: {data['env'].get('risk_adjusted_reward', True)}
 """
@@ -314,9 +300,71 @@ def get_system_status():
         'metrics': get_system_metrics()
     })
 
+@app.route('/api/system/config', methods=['GET'])
+def get_system_config():
+    """Get system configuration"""
+    try:
+        with open('config/config.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+        return jsonify({
+            'model': config.get('model', {}),
+            'env': config.get('env', {}),
+            'impala': config.get('impala', {}),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/system/config', methods=['POST'])
+def update_system_config():
+    """Update system configuration"""
+    data = request.json
+    try:
+        with open('config/config.yaml', 'w') as f:
+            config_content = f"""algorithm: impala
+
+model:
+  features_dim: {data['model']['features_dim']}
+  transformer:
+    d_model: {data['model']['transformer']['d_model']}
+    nhead: {data['model']['transformer']['nhead']}
+    num_layers: {data['model']['transformer']['num_layers']}
+    dropout: {data['model']['transformer']['dropout']}
+
+env:
+  symbols: {data['env']['symbols']}
+  timeframes: {data['env']['timeframes']}
+  window_size: {data['env']['window_size']}
+  reward_scaling: {data['env']['reward_scaling']}
+  min_reward: {data['env']['min_reward']}
+  max_reward: {data['env']['max_reward']}
+  survival_bonus: {data['env']['survival_bonus']}
+  leverage_penalty: {data['env']['leverage_penalty']}
+  trade_reward_multiplier: {data['env']['trade_reward_multiplier']}
+  drawdown_penalty: {data['env']['drawdown_penalty']}
+  early_close_bonus: {data['env']['early_close_bonus']}
+  volatility_penalty: {data['env']['volatility_penalty']}
+  position_size_penalty: {data['env']['position_size_penalty']}
+  max_leverage: {data['env']['max_leverage']}
+  min_tp_sl_ratio: {data['env']['min_tp_sl_ratio']}
+  atr_multiplier: {data['env']['atr_multiplier']}
+  use_cached_features: {str(data['env']['use_cached_features']).lower()}
+
+impala:
+  learning_rate: {data['impala']['learning_rate']}
+  batch_size: {data['impala']['batch_size']}
+  minibatch_size: {data['impala']['minibatch_size']}
+  num_rollout_workers: {data['impala']['num_rollout_workers']}
+  rollout_fragment_length: {data['impala']['rollout_fragment_length']}
+  num_gpus: {data['impala']['num_gpus']}
+"""
+            f.write(config_content)
+        return jsonify({'status': 'updated'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("🚀 Starting RL Trading Backend Server...")
     print("📊 API available at http://localhost:5000")
     print("🔄 Press Ctrl+C to stop the server")
     
-    app.run(host='0.0.0.0', port=5000, debug=False) 
+    app.run(host='0.0.0.0', port=5000, debug=False)

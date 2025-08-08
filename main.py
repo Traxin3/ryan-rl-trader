@@ -16,7 +16,6 @@ from ray.rllib.env.env_context import EnvContext
 from ray.rllib.env import PettingZooEnv
 from ray.tune.registry import register_env
 from ray.rllib.models import ModelCatalog
-from model.ppo_model import TransformerRLlibModel
 from gym_mtsim.envs.mt_env import MtEnv
 import warnings
 
@@ -135,7 +134,7 @@ def load_backtest_config():
         print("⚠️ No backtest_config.yaml found, using defaults")
         return {
             'backtest': {
-                'model_path': "ppo_transformer_mtsim_final",
+                'model_path': "impala_transformer_mtsim_final",
                 'output': {
                     'report_path': "backtest_results/report.html",
                     'save_trades': True,
@@ -380,11 +379,40 @@ def run_training(config):
     print("🏋️ Starting Training Process (Ray RLlib)")
     print("="*50)
     try:
-        register_env("TradingEnv", lambda cfg: MtEnv(**cfg))
-        ModelCatalog.register_custom_model("transformer_trading_model", TransformerRLlibModel)
+        import inspect
+        def filter_env_config(cfg):
+            valid_args = inspect.signature(MtEnv.__init__).parameters
+            return {k: v for k, v in cfg.items() if k in valid_args}
 
+        env_config = config["env"]
+        symbols = env_config.get('symbols', ['EURUSD'])
+        timeframes = env_config.get('timeframes', [15])
+        base_cache = f"feature_cache_{'_'.join(symbols)}_{'_'.join(map(str, timeframes))}.pkl"
+        try:
+            import glob
+            base_no_ext, _ = os.path.splitext(base_cache)
+            matches = glob.glob(f"{base_no_ext}_*.pkl")
+        except Exception:
+            matches = []
+
+        if matches:
+            print(f"✅ Found cached features: {os.path.basename(matches[0])}")
+            print("🚀 Skipping feature engineering, using cached features directly!")
+            config["env"]["use_cached_features"] = True
+        else:
+            print("\n🔬 Running feature engineering and caching features (one-time)...")
+            pre_cache_env_config = config["env"].copy()
+            pre_cache_env_config["use_cached_features"] = False
+            MtEnv(**filter_env_config(pre_cache_env_config))
+            print("✅ Feature engineering and caching complete.")
+
+            config["env"]["use_cached_features"] = True
+
+        register_env("TradingEnv", lambda cfg: MtEnv(**filter_env_config(cfg)))
+        
         algo_name = config.get("algorithm", "impala")
         get_algo_config = get_algorithm_class(algo_name)
+
 
         model_config = {
             "custom_model": "transformer_trading_model",
@@ -397,15 +425,21 @@ def run_training(config):
         algo_config = get_algo_config(
             env_config=config["env"],
             model_config=model_config,
-            ppo_config=config["ppo"]
+            training_config=config.get(algo_name, {})
         )
 
         print("\n🏃 Starting Ray Tune training...")
+        abs_ray_results = os.path.abspath("./ray_results")
+        if os.name == "nt":
+            abs_ray_results_fixed = abs_ray_results.replace('\\', '/')
+            storage_uri = f"file:///{abs_ray_results_fixed}"
+        else:
+            storage_uri = f"file://{abs_ray_results}"
         analysis = tune.run(
             algo_name.upper(),
             config=algo_config.to_dict(),
             stop={"training_iteration": 10},
-            local_dir="./ray_results",
+            storage_path=storage_uri,
             checkpoint_at_end=True,
         )
         print("\n✅ Training completed. Results in ./ray_results")
