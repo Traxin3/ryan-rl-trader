@@ -1,0 +1,64 @@
+version: "3.9"
+
+name: ryan-rl-trader
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: traxin3/ryan-backend:dev
+    command: python main.py --backend
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env.local
+    volumes:
+      - ./:/app
+      - sb3_checkpoints:/app/sb3_checkpoints
+      - tensorboard_logs:/app/tensorboard_logs
+      - backtest_results:/app/backtest_results
+    deploy:
+      resources:
+        reservations:
+          devices: []
+    profiles: ["dev"]
+
+  frontend:
+    image: node:20-bookworm-slim
+    working_dir: /app
+    command: sh -c "npm ci || npm install --force; npm run dev"
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_TELEMETRY_DISABLED=1
+    volumes:
+      - ./ryan-dash:/app
+    profiles: ["dev"]
+
+  tensorboard:
+    image: tensorflow/tensorflow:2.17.0
+    command: tensorboard --logdir=/logs --host=0.0.0.0 --port=6006
+    ports:
+      - "6006:6006"
+    volumes:
+      - tensorboard_logs:/logs
+    profiles: ["dev"]
+
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: traxin3/ryan-backend:dev
+    command: python main.py --train --config config/config.yaml
+    volumes:
+      - ./:/app
+      - sb3_checkpoints:/app/sb3_checkpoints
+      - tensorboard_logs:/app/tensorboard_logs
+      - backtest_results:/app/backtest_results
+    profiles: ["train"]
+
+volumes:
+  sb3_checkpoints:
+  tensorboard_logs:
+  backtest_results:

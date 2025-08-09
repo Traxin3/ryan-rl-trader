@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+
+# Node
+ryan-dash/node_modules/
+ryan-dash/.next/
+ryan-dash/out/
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# Data/Artifacts
+sb3_checkpoints/
+tensorboard_logs/
+backtest_results/
+feature_cache_*.pkl
+*.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db

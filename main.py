@@ -1,5 +1,6 @@
 import os
 import platform
+import dash
 import yaml
 import argparse
 import subprocess
@@ -508,7 +509,7 @@ if __name__ == "__main__":
             start_gui_mode()
         elif args.backend:
             try:
-                from backend_server import app
+                from ryan_dash.backend_server import app
                 print("\n" + "="*50)
                 print("🚀 Starting RL Trading Backend Server")
                 print("="*50)

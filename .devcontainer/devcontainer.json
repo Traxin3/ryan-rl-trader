@@ -1,0 +1,48 @@
+{
+  "name": "ryan-rl-trader",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "args": {
+      "PYTHON_VERSION": "3.12"
+    }
+  },
+  "runArgs": ["--init"],
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/app,type=bind,consistency=cached"
+  ],
+  "remoteUser": "appuser",
+  "postCreateCommand": "/bin/bash -lc 'set -e; python -m pip install --upgrade pip; if command -v nvidia-smi >/dev/null 2>&1; then echo Using GPU torch; pip install --index-url https://download.pytorch.org/whl/cu121 torch; else echo Using CPU torch; pip install --index-url https://download.pytorch.org/whl/cpu torch; fi; pip install -r requirements.txt; cd ryan-dash && (npm ci || npm install --force) && cd -'",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "files.exclude": {
+          "**/__pycache__": true,
+          "**/.pytest_cache": true,
+          "**/.mypy_cache": true,
+          "**/.ipynb_checkpoints": true,
+          "**/.next": true,
+          "**/node_modules": true
+        }
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "ms-azuretools.vscode-docker",
+        "github.vscode-github-actions",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  }
+}

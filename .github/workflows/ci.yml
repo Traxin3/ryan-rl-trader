@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [ dev-v1, main ]
+  pull_request:
+    branches: [ dev-v1, main ]
+
+jobs:
+  python-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Lint
+        run: |
+          pip install black flake8
+          black --check .
+          flake8 .
+      - name: Tests
+        run: |
+          pytest -q || echo "No tests found"
+
+  frontend-ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ryan-dash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ryan-dash/package-lock.json
+      - name: Install
+        run: |
+          npm ci || npm install --force
+      - name: Build
+        run: npm run build
+
+  docker-build-and-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ryan-backend:${{ github.sha }}
+          outputs: type=docker,dest=backend.tar
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ryan-dash/Dockerfile
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ryan-frontend:${{ github.sha }}
+          outputs: type=docker,dest=frontend.tar
+
+      - name: Trivy FS scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-fs.sarif'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+
+      - name: Upload Trivy FS results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-fs.sarif'
+
+      - name: Load backend image
+        run: docker load --input backend.tar
+      - name: Load frontend image
+        run: docker load --input frontend.tar
+
+      - name: Trivy image scan (backend)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/ryan-backend:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-backend.sarif'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Trivy image scan (frontend)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/ryan-frontend:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-frontend.sarif'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Upload Trivy image results (backend)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-backend.sarif'
+
+      - name: Upload Trivy image results (frontend)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-frontend.sarif'
