@@ -8,10 +8,10 @@ class OrderType(IntEnum):
 
     @property
     def sign(self) -> float:
-        return 1. if self == OrderType.Buy else -1.
+        return 1.0 if self == OrderType.Buy else -1.0
 
     @property
-    def opposite(self) -> 'OrderType':
+    def opposite(self) -> "OrderType":
         if self == OrderType.Sell:
             return OrderType.Buy
         return OrderType.Sell
@@ -41,8 +41,8 @@ class Order:
         self.entry_price = entry_price
         self.exit_time = exit_time
         self.exit_price = exit_price
-        self.exit_balance = float('nan')
-        self.exit_equity = float('nan')
-        self.profit = 0.
-        self.margin = 0.
+        self.exit_balance = float("nan")
+        self.exit_equity = float("nan")
+        self.profit = 0.0
+        self.margin = 0.0
         self.closed: bool = False

@@ -8,21 +8,24 @@ import pandas as pd
 
 import platform
 
+
 def is_mt5_available():
     return platform.system() == "Windows"
+
 
 from . import interface as mt
 from .symbol import SymbolInfo
 
 
 def retrieve_data(
-        symbol: str, from_dt: datetime, to_dt: datetime, timeframe: mt.Timeframe
-    ) -> Tuple[SymbolInfo, pd.DataFrame]:
+    symbol: str, from_dt: datetime, to_dt: datetime, timeframe: mt.Timeframe
+) -> Tuple[SymbolInfo, pd.DataFrame]:
 
     if not is_mt5_available():
         raise RuntimeError("MetaTrader5 is not available on this platform.")
     import MetaTrader5 as mt5
     from . import interface as mt
+
     if not mt.initialize():
         raise ConnectionError(f"MetaTrader cannot be initialized")
 
@@ -45,12 +48,14 @@ def retrieve_data(
 
     rates_frame = pd.DataFrame(
         all_rates,
-        columns=['Time', 'Open', 'High', 'Low', 'Close', 'Volume', '_', '_'],
+        columns=["Time", "Open", "High", "Low", "Close", "Volume", "_", "_"],
     )
-    rates_frame['Time'] = pd.to_datetime(rates_frame['Time'], unit='s', utc=True)
+    rates_frame["Time"] = pd.to_datetime(rates_frame["Time"], unit="s", utc=True)
 
-    data = rates_frame[['Time', 'Open', 'Close', 'Low', 'High', 'Volume']].set_index('Time')
-    data = data.loc[~data.index.duplicated(keep='first')]
+    data = rates_frame[["Time", "Open", "Close", "Low", "High", "Volume"]].set_index(
+        "Time"
+    )
+    data = data.loc[~data.index.duplicated(keep="first")]
 
     mt.shutdown()
 
@@ -61,22 +66,27 @@ def _get_symbol_info(symbol: str) -> SymbolInfo:
     if not is_mt5_available():
         raise RuntimeError("MetaTrader5 is not available on this platform.")
     import MetaTrader5 as mt5
+
     if not mt5.initialize():
         raise RuntimeError(f"MetaTrader5 initialize() failed: {mt5.last_error()}")
     if not mt5.symbol_select(symbol, True):
         mt5.shutdown()
-        raise RuntimeError(f"MetaTrader5 symbol_select({symbol}) failed: {mt5.last_error()}")
+        raise RuntimeError(
+            f"MetaTrader5 symbol_select({symbol}) failed: {mt5.last_error()}"
+        )
     info = mt5.symbol_info(symbol)
     if info is None:
         mt5.shutdown()
-        raise ValueError(f"MetaTrader5 symbol_info({symbol}) returned None. Make sure the symbol is visible in Market Watch.")
+        raise ValueError(
+            f"MetaTrader5 symbol_info({symbol}) returned None. Make sure the symbol is visible in Market Watch."
+        )
     symbol_info = SymbolInfo(info)
     mt5.shutdown()
     return symbol_info
 
 
 def _local2utc(dt: datetime) -> datetime:
-    return dt.astimezone(pytz.timezone('Etc/UTC'))
+    return dt.astimezone(pytz.timezone("Etc/UTC"))
 
 
 def _add_months(sourcedate: datetime, months: int) -> datetime:
@@ -86,13 +96,19 @@ def _add_months(sourcedate: datetime, months: int) -> datetime:
     day = min(sourcedate.day, calendar.monthrange(year, month)[1])
 
     return datetime(
-        year, month, day,
-        sourcedate.hour, sourcedate.minute, sourcedate.second,
-        tzinfo=sourcedate.tzinfo
+        year,
+        month,
+        day,
+        sourcedate.hour,
+        sourcedate.minute,
+        sourcedate.second,
+        tzinfo=sourcedate.tzinfo,
     )
 
 
-def fetch_mt5_rates(symbol: str, timeframe: int, start: datetime = None, end: datetime = None) -> pd.DataFrame:
+def fetch_mt5_rates(
+    symbol: str, timeframe: int, start: datetime = None, end: datetime = None
+) -> pd.DataFrame:
     """
     Fetch historical rates from MetaTrader5 for a given symbol, timeframe, and date range (tries 365, 180, 90, 30, 7, 1 days).
     Returns a pandas DataFrame indexed by datetime, or raises ValueError if no data is returned.
@@ -100,13 +116,23 @@ def fetch_mt5_rates(symbol: str, timeframe: int, start: datetime = None, end: da
     if not is_mt5_available():
         raise RuntimeError("MetaTrader5 is not available on this platform.")
     import MetaTrader5 as mt5
+
     if not mt5.initialize():
         raise RuntimeError(f"MetaTrader5 initialize() failed: {mt5.last_error()}")
     if not mt5.symbol_select(symbol, True):
         mt5.shutdown()
-        raise RuntimeError(f"MetaTrader5 symbol_select({symbol}) failed: {mt5.last_error()}")
-    tf_map = {1: mt5.TIMEFRAME_M1, 5: mt5.TIMEFRAME_M5, 15: mt5.TIMEFRAME_M15, 30: mt5.TIMEFRAME_M30,
-              60: mt5.TIMEFRAME_H1, 240: mt5.TIMEFRAME_H4, 1440: mt5.TIMEFRAME_D1}
+        raise RuntimeError(
+            f"MetaTrader5 symbol_select({symbol}) failed: {mt5.last_error()}"
+        )
+    tf_map = {
+        1: mt5.TIMEFRAME_M1,
+        5: mt5.TIMEFRAME_M5,
+        15: mt5.TIMEFRAME_M15,
+        30: mt5.TIMEFRAME_M30,
+        60: mt5.TIMEFRAME_H1,
+        240: mt5.TIMEFRAME_H4,
+        1440: mt5.TIMEFRAME_D1,
+    }
     if timeframe not in tf_map:
         mt5.shutdown()
         raise ValueError(f"Unsupported timeframe: {timeframe}")
@@ -121,17 +147,22 @@ def fetch_mt5_rates(symbol: str, timeframe: int, start: datetime = None, end: da
         if rates is not None and len(rates) > 0:
             mt5.shutdown()
             df = pd.DataFrame(rates)
-            df['time'] = pd.to_datetime(df['time'], unit='s')
-            df.set_index('time', inplace=True)
-            df.rename(columns={
-                'open': 'Open',
-                'high': 'High',
-                'low': 'Low',
-                'close': 'Close',
-                'tick_volume': 'TickVolume',
-                'spread': 'Spread',
-                'real_volume': 'RealVolume'
-            }, inplace=True)
+            df["time"] = pd.to_datetime(df["time"], unit="s")
+            df.set_index("time", inplace=True)
+            df.rename(
+                columns={
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "tick_volume": "TickVolume",
+                    "spread": "Spread",
+                    "real_volume": "RealVolume",
+                },
+                inplace=True,
+            )
             return df
     mt5.shutdown()
-    raise ValueError(f"No data returned for {symbol} {timeframe}m in the last {day_windows[0]} to {day_windows[-1]} days up to {end}")
+    raise ValueError(
+        f"No data returned for {symbol} {timeframe}m in the last {day_windows[0]} to {day_windows[-1]} days up to {end}"
+    )

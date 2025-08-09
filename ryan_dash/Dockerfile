@@ -2,14 +2,14 @@
 
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
-COPY ryan-dash/package.json ryan-dash/package-lock.json* ./
+COPY ryan_dash/package.json ryan_dash/package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm \
     (npm ci || npm install --force)
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY ryan-dash/. .
+COPY ryan_dash/. .
 RUN npm run build
 
 FROM node:20-bookworm-slim AS runtime
