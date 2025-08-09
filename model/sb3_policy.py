@@ -25,19 +25,25 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
 
         transformer_config = transformer_config or {}
-        d_model = transformer_config.get('d_model', features_dim)
+        d_model = transformer_config.get("d_model", features_dim)
 
-        self.transformer = TransformerFeatureExtractor(observation_space, config={
-            'd_model': d_model,
-            'nhead': transformer_config.get('nhead', 8),
-            'num_layers': transformer_config.get('num_layers', 4),
-            'dropout': transformer_config.get('dropout', 0.1),
-            'scales': transformer_config.get('scales', [1, 2, 4]),
-        })
+        self.transformer = TransformerFeatureExtractor(
+            observation_space,
+            config={
+                "d_model": d_model,
+                "nhead": transformer_config.get("nhead", 8),
+                "num_layers": transformer_config.get("num_layers", 4),
+                "dropout": transformer_config.get("dropout", 0.1),
+                "scales": transformer_config.get("scales", [1, 2, 4]),
+            },
+        )
 
-        self.use_liquidity = isinstance(observation_space, spaces.Dict) and 'liquidity' in observation_space.spaces
+        self.use_liquidity = (
+            isinstance(observation_space, spaces.Dict)
+            and "liquidity" in observation_space.spaces
+        )
         if self.use_liquidity:
-            liq_space = observation_space.spaces['liquidity']
+            liq_space = observation_space.spaces["liquidity"]
             assert isinstance(liq_space, spaces.Box) and len(liq_space.shape) == 2
             liq_in = liq_space.shape[1]
             self.liquidity_mlp = nn.Sequential(
@@ -49,9 +55,12 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
         else:
             self.liquidity_mlp = None
 
-        self.use_orders = isinstance(observation_space, spaces.Dict) and 'orders' in observation_space.spaces
+        self.use_orders = (
+            isinstance(observation_space, spaces.Dict)
+            and "orders" in observation_space.spaces
+        )
         if self.use_orders:
-            ord_space = observation_space.spaces['orders']
+            ord_space = observation_space.spaces["orders"]
             assert isinstance(ord_space, spaces.Box) and len(ord_space.shape) == 1
             ord_in = ord_space.shape[0]
             self.orders_mlp = nn.Sequential(
@@ -84,8 +93,8 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
         x = self.transformer(obs)
         feats = [x]
 
-        if self.use_liquidity and 'liquidity' in obs:
-            liq = obs['liquidity']  # [B, T, L] or [T, L]
+        if self.use_liquidity and "liquidity" in obs:
+            liq = obs["liquidity"]  # [B, T, L] or [T, L]
             if liq.dim() == 2:
                 liq = liq.unsqueeze(0)
             mean_pool = liq.mean(dim=1)
@@ -93,8 +102,8 @@ class SB3TransformerExtractor(BaseFeaturesExtractor):
             liq_vec = torch.cat([mean_pool, max_pool], dim=-1)
             feats.append(self.liquidity_mlp(liq_vec))
 
-        if self.use_orders and 'orders' in obs:
-            ords = obs['orders']
+        if self.use_orders and "orders" in obs:
+            ords = obs["orders"]
             if ords.dim() > 2:
                 ords = ords.view(ords.size(0), -1)
             feats.append(self.orders_mlp(ords))

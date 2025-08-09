@@ -20,14 +20,14 @@ WORKDIR /app
 # Copy requirements and install (CPU by default)
 COPY requirements.txt ./
 # Also copy backend API requirements
-COPY ryan-dash/backend_requirements.txt ./ryan-dash/backend_requirements.txt
+COPY ryan_dash/backend_requirements.txt ./ryan_dash/backend_requirements.txt
 # Torch CPU by default; allow override at build time
 ARG TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
     && pip install --index-url ${TORCH_INDEX_URL} torch \
     && pip install -r requirements.txt \
-    && pip install -r ryan-dash/backend_requirements.txt
+    && pip install -r ryan_dash/backend_requirements.txt
 
 # Copy code
 COPY . .

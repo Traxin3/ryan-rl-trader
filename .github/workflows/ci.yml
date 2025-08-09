@@ -36,14 +36,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ryan-dash
+        working-directory: ryan_dash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: ryan-dash/package-lock.json
+          cache-dependency-path: ryan_dash/package-lock.json
       - name: Install
         run: |
           npm ci || npm install --force
@@ -76,7 +76,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ryan-dash/Dockerfile
+          file: ryan_dash/Dockerfile
           tags: |
             ghcr.io/${{ github.repository_owner }}/ryan-frontend:${{ github.sha }}
           outputs: type=docker,dest=frontend.tar
